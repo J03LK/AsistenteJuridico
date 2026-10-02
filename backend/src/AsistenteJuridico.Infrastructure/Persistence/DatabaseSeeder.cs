@@ -4,6 +4,7 @@ using AsistenteJuridico.Domain.Entities;
 using AsistenteJuridico.Infrastructure.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -13,9 +14,50 @@ public static class DatabaseSeeder
 {
     public static readonly Guid TenantBId = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
+    /// <summary>
+    /// Claves de configuración con las contraseñas de los usuarios semilla de desarrollo. Los valores se
+    /// proporcionan fuera del repositorio (dotnet user-secrets o variables de entorno DevSeed__Passwords__*).
+    /// </summary>
+    public const string PasswordAdminKey = "DevSeed:Passwords:Admin";
+    public const string PasswordAbogadoSeniorKey = "DevSeed:Passwords:AbogadoSenior";
+    public const string PasswordAbogadoJuniorKey = "DevSeed:Passwords:AbogadoJunior";
+    public const string PasswordAbogadoTenantBKey = "DevSeed:Passwords:AbogadoTenantB";
+    public const string PasswordSuperAdminKey = "DevSeed:Passwords:SuperAdmin";
+
+    public static readonly IReadOnlyList<string> RequiredPasswordKeys =
+    [
+        PasswordAdminKey,
+        PasswordAbogadoSeniorKey,
+        PasswordAbogadoJuniorKey,
+        PasswordAbogadoTenantBKey,
+        PasswordSuperAdminKey
+    ];
+
+    /// <summary>
+    /// Valida y devuelve las contraseñas de los usuarios semilla. Falla con un error explícito que nombra las
+    /// claves ausentes; no existe ninguna contraseña por defecto.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> GetRequiredSeedPasswords(IConfiguration configuration)
+    {
+        var faltantes = RequiredPasswordKeys.Where(k => string.IsNullOrWhiteSpace(configuration[k])).ToList();
+        if (faltantes.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "Faltan las contraseñas de los usuarios semilla de desarrollo: " + string.Join(", ", faltantes) +
+                ". Configúrelas fuera del repositorio con 'dotnet user-secrets set \"<clave>\" <valor>' en " +
+                "backend/src/AsistenteJuridico.API o con variables de entorno (por ejemplo DevSeed__Passwords__Admin).");
+        }
+
+        return RequiredPasswordKeys.ToDictionary(k => k, k => configuration[k]!);
+    }
+
     public static async Task SeedDevelopmentDataAsync(IServiceProvider serviceProvider)
     {
         using var scope = serviceProvider.CreateScope();
+
+        // Antes de sembrar nada: sin contraseñas configuradas el seeder no se ejecuta parcialmente
+        var passwords = GetRequiredSeedPasswords(scope.ServiceProvider.GetRequiredService<IConfiguration>());
+
         var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<Usuario>>();
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<ApplicationRole>>();
@@ -95,7 +137,7 @@ public static class DatabaseSeeder
             await context.SaveChangesAsync();
 
             // ──────────────────────────────────────────────────────────
-            // 3. SEED DE USUARIOS CON PASSWORDS SEGURAS
+            // 3. SEED DE USUARIOS (contraseñas desde configuración externa, nunca en el código)
             // ──────────────────────────────────────────────────────────
             // Admin del Tenant A
             await EnsureUserCreatedAsync(
@@ -104,7 +146,7 @@ public static class DatabaseSeeder
                 "admin@estudiojuridico.ec",
                 "Abogado Administrador Demo",
                 Roles.AdminEstudio,
-                "REMOVED_SECRET",
+                passwords[PasswordAdminKey],
                 logger);
 
             // Abogado Senior del Tenant A
@@ -114,7 +156,7 @@ public static class DatabaseSeeder
                 "abogado.senior@estudiojuridico.ec",
                 "Dr. Carlos Mendoza",
                 Roles.AbogadoSenior,
-                "REMOVED_SECRET",
+                passwords[PasswordAbogadoSeniorKey],
                 logger);
 
             // Abogado Junior del Tenant A
@@ -124,7 +166,7 @@ public static class DatabaseSeeder
                 "abogado.junior@estudiojuridico.ec",
                 "Abg. Valeria Andrade",
                 Roles.AbogadoJunior,
-                "REMOVED_SECRET",
+                passwords[PasswordAbogadoJuniorKey],
                 logger);
 
             // Abogado del Tenant B (para pruebas de aislamiento multi-tenant)
@@ -134,7 +176,7 @@ public static class DatabaseSeeder
                 "abogado@quitolegal.ec",
                 "Dr. Fernando Suárez",
                 Roles.AbogadoSenior,
-                "REMOVED_SECRET",
+                passwords[PasswordAbogadoTenantBKey],
                 logger);
 
             // SuperAdmin Global
@@ -144,7 +186,7 @@ public static class DatabaseSeeder
                 "superadmin@asistentejuridico.ec",
                 "Super Administrador SaaS",
                 Roles.SuperAdmin,
-                "REMOVED_SECRET",
+                passwords[PasswordSuperAdminKey],
                 logger);
 
             logger.LogInformation("Seed técnico de autenticación y seguridad completado exitosamente.");

@@ -98,28 +98,57 @@ try
                     QueueLimit = 0
                 }));
 
-        // Cuota de IA por usuario autenticado (por defecto 60 solicitudes/minuto, ver AIRateLimitOptions).
+        // Contrato Fase 6 — AIRateLimit: 15/minuto por usuario Y 60/minuto por tenant (AIRateLimitOptions).
+        // Ambas cuotas coexisten y se identifican solo por claims del JWT (sub, tenant_id), nunca por IP.
         // Requiere que UseRateLimiter se ejecute después de UseAuthentication para conocer al usuario.
+        // Las peticiones sin identidad no consumen cuota: la autorización las rechaza con 401.
+
+        // 1. Cuota por usuario: política de endpoint "AIRateLimit"
         options.AddPolicy("AIRateLimit", httpContext =>
         {
-            var aiRateLimit = httpContext.RequestServices
-                .GetRequiredService<Microsoft.Extensions.Options.IOptions<AIRateLimitOptions>>().Value;
-
+            var aiRateLimit = GetAIRateLimitOptions(httpContext);
             var userId = httpContext.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-            var partitionKey = userId != null
-                ? $"user:{userId}"
-                : $"ip:{httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous"}";
+            var tenantId = httpContext.User.FindFirst("tenant_id")?.Value;
+
+            if (userId == null || tenantId == null)
+            {
+                return RateLimitPartition.GetNoLimiter("ai:sin-identidad");
+            }
 
             return RateLimitPartition.GetFixedWindowLimiter(
-                partitionKey: partitionKey,
-                factory: _ => new FixedWindowRateLimiterOptions
-                {
-                    PermitLimit = aiRateLimit.PermitLimit,
-                    Window = TimeSpan.FromSeconds(aiRateLimit.WindowSeconds),
-                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                    QueueLimit = 0
-                });
+                partitionKey: $"ai:tenant:{tenantId}:user:{userId}",
+                factory: _ => CreateAIWindow(aiRateLimit.UserPermitLimit, aiRateLimit.WindowSeconds));
         });
+
+        // 2. Cuota por tenant: limitador global que solo actúa en endpoints con la política "AIRateLimit".
+        // Se evalúa antes que la política de endpoint; si cualquiera de las dos se agota, la respuesta es 429.
+        options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
+        {
+            var politica = httpContext.GetEndpoint()?.Metadata
+                .GetMetadata<Microsoft.AspNetCore.RateLimiting.EnableRateLimitingAttribute>()?.PolicyName;
+            var tenantId = httpContext.User.FindFirst("tenant_id")?.Value;
+
+            if (politica != "AIRateLimit" || tenantId == null)
+            {
+                return RateLimitPartition.GetNoLimiter("ai:no-aplica");
+            }
+
+            var aiRateLimit = GetAIRateLimitOptions(httpContext);
+            return RateLimitPartition.GetFixedWindowLimiter(
+                partitionKey: $"ai:tenant:{tenantId}",
+                factory: _ => CreateAIWindow(aiRateLimit.TenantPermitLimit, aiRateLimit.WindowSeconds));
+        });
+
+        static AIRateLimitOptions GetAIRateLimitOptions(HttpContext httpContext) =>
+            httpContext.RequestServices.GetRequiredService<Microsoft.Extensions.Options.IOptions<AIRateLimitOptions>>().Value;
+
+        static FixedWindowRateLimiterOptions CreateAIWindow(int permitLimit, int windowSeconds) => new()
+        {
+            PermitLimit = permitLimit,
+            Window = TimeSpan.FromSeconds(windowSeconds),
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            QueueLimit = 0
+        };
     });
 
     // ──────────────────────────────────────────────────────────
@@ -225,7 +254,7 @@ try
     // 6. Autenticación (JWT Bearer)
     app.UseAuthentication();
 
-    // 7. Rate Limiting (después de la autenticación: la cuota de IA se particiona por usuario)
+    // 7. Rate Limiting (después de la autenticación: la cuota de IA se particiona por usuario y por tenant)
     app.UseRateLimiter();
 
     // 8. Seguridad Multi-Tenant (después de Authentication para leer claims del JWT)

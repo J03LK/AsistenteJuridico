@@ -27,8 +27,7 @@ namespace AsistenteJuridico.Domain.Tests.Fase6;
 /// </summary>
 public class Fase6PostgreSqlIntegrationTests
 {
-    private const string PostgresConnectionString =
-        "Host=localhost;Port=5433;Database=asistente_juridico;Username=aj_user;Password=REMOVED_SECRET";
+    private static string PostgresConnectionString => TestConfiguration.PostgresConnectionString;
 
     private class MockCurrentTenantService : ICurrentTenantService
     {

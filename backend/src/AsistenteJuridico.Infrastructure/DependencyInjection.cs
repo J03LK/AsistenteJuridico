@@ -76,8 +76,26 @@ public static class DependencyInjection
         // ──────────────────────────────────────────────────────────
         // AUTENTICACIÓN JWT BEARER
         // ──────────────────────────────────────────────────────────
-        var secretKey = configuration["Jwt:Key"]
-            ?? "REMOVED_SECRET";
+        // La clave de firma se proporciona SIEMPRE fuera del repositorio (variable de entorno Jwt__Key o
+        // dotnet user-secrets en desarrollo). No existe valor por defecto: sin clave la API no arranca.
+        var secretKey = configuration["Jwt:Key"];
+        if (string.IsNullOrWhiteSpace(secretKey))
+        {
+            throw new InvalidOperationException(
+                "Falta la clave de firma JWT 'Jwt:Key'. Configúrela fuera del repositorio mediante la variable de " +
+                "entorno 'Jwt__Key' o, en desarrollo, con 'dotnet user-secrets set \"Jwt:Key\" <clave>'.");
+        }
+        if (secretKey.Contains("CAMBIAR_EN_PRODUCCION", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "La clave 'Jwt:Key' contiene el valor de ejemplo de .env.example. Genere una clave aleatoria propia.");
+        }
+        if (Encoding.UTF8.GetByteCount(secretKey) < 32)
+        {
+            throw new InvalidOperationException(
+                "La clave 'Jwt:Key' debe tener al menos 32 bytes (256 bits) para HMAC-SHA256.");
+        }
+
         var issuer = configuration["Jwt:Issuer"] ?? "AsistenteJuridicoIA";
         var audience = configuration["Jwt:Audience"] ?? "AsistenteJuridicoClients";
 

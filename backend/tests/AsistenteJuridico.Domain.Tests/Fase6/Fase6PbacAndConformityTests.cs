@@ -431,9 +431,10 @@ public class Fase6PbacAndConformityTests
     }
 
     // ─────────────────────────────────────────────────────────────
-    // TEST 10: Rate limiting -> Cuota excedida produce HTTP 429
-    // Comportamiento HTTP real sobre el pipeline completo de la API. El límite se reduce a 2 solo en
-    // este host de prueba; la configuración normal continúa en 60 solicitudes/minuto por usuario.
+    // TEST 10: Rate limiting -> Cuota excedida produce HTTP 429 (Caso A: cuota por usuario)
+    // Comportamiento HTTP real sobre el pipeline completo de la API. La cuota por usuario se reduce a 2
+    // solo en este host de prueba. Contrato: 15/minuto/usuario y 60/minuto/tenant, coexistiendo.
+    // La cuota por tenant (Caso B) y el aislamiento entre tenants (Caso C) están en Fase62ApiBehaviorTests.
     // ─────────────────────────────────────────────────────────────
     [Fact]
     public async Task Test10_RateLimiting_SuperarCuotaProduceHttp429()
@@ -441,7 +442,8 @@ public class Fase6PbacAndConformityTests
         await using var factory = new AiApiFactory(services =>
             services.Configure<AIRateLimitOptions>(o =>
             {
-                o.PermitLimit = 2;
+                o.UserPermitLimit = 2;
+                o.TenantPermitLimit = 100;
                 o.WindowSeconds = 60;
             }));
         using var client = factory.CreateClient();
@@ -466,13 +468,14 @@ public class Fase6PbacAndConformityTests
         Assert.Contains(body.RootElement.GetProperty("errors").EnumerateArray(), e => e.GetString() == "TOO_MANY_REQUESTS");
         Assert.True(r3.Headers.Contains("Retry-After"));
 
-        // La cuota es por usuario: otro usuario del mismo origen no se ve afectado
+        // La cuota individual es por usuario: otro usuario del mismo tenant y del mismo origen no se ve afectado
         var rB = await client.SendAsync(factory.Request(HttpMethod.Get, "/api/v1/ai/capacidades", tokenUsuarioB));
         Assert.Equal(System.Net.HttpStatusCode.OK, rB.StatusCode);
 
-        // Configuración normal (sin sobrescritura de prueba): 60 solicitudes por minuto
+        // Configuración contractual por defecto: 15/minuto por usuario y 60/minuto por tenant
         var porDefecto = new AIRateLimitOptions();
-        Assert.Equal(60, porDefecto.PermitLimit);
+        Assert.Equal(15, porDefecto.UserPermitLimit);
+        Assert.Equal(60, porDefecto.TenantPermitLimit);
         Assert.Equal(60, porDefecto.WindowSeconds);
     }
 

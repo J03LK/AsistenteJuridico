@@ -8,16 +8,45 @@
 .env.*.local
 !.env.example
 
+# ── Configuración local / de producción con secretos ─────────
+**/appsettings.Local.json
+**/appsettings.*.Local.json
+**/appsettings.Production.json
+**/appsettings.Staging.json
+
 # ── .NET ─────────────────────────────────────────────────────
 **/bin/
 **/obj/
 *.user
 *.suo
+*.userprefs
 .vs/
 *.log
 TestResults/
 coverage/
+*.coverage
+*.coveragexml
 **/.DS_Store
+
+# ── Logs y archivos generados por la aplicación ──────────────
+# Logs de Serilog (pueden contener rutas, IDs y datos de peticiones)
+**/logs/
+# Documentos subidos por usuarios (datos jurídicos de clientes)
+**/storage/
+
+# ── Bases de datos / volcados ────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.mdf
+*.ldf
+*.dump
+*.backup
+*.bak
+pgdata/
+postgres/data/
 
 # ── Angular / Node ───────────────────────────────────────────
 **/node_modules/
@@ -25,8 +54,25 @@ frontend/asistente-juridico/.angular/
 frontend/asistente-juridico/dist/
 frontend/asistente-juridico/coverage/
 
+# ── Angular / Node (complemento) ─────────────────────────────
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+frontend/asistente-juridico/test-results/
+frontend/asistente-juridico/playwright-report/
+
 # ── Docker ───────────────────────────────────────────────────
 docker-compose.override.yml.bak
+docker-compose.*.local.yml
+
+# ── Temporales y sistema ─────────────────────────────────────
+*.tmp
+*.temp
+*.swp
+*~
+Thumbs.db
+desktop.ini
 
 # ── JetBrains / Riders ───────────────────────────────────────
 .idea/
@@ -41,4 +87,6 @@ docker-compose.override.yml.bak
 *.pfx
 *.p12
 *.key
+*.pem
 secrets.json
+*.secrets.json

@@ -18,8 +18,7 @@ namespace AsistenteJuridico.Domain.Tests.Fase6;
 /// </summary>
 public class Fase62PostgreSqlTests
 {
-    private const string DevConnectionString =
-        "Host=localhost;Port=5433;Database=asistente_juridico;Username=aj_user;Password=REMOVED_SECRET";
+    private static string DevConnectionString => TestConfiguration.PostgresConnectionString;
 
     private static ApplicationDbContext CreateContext(string connectionString, Guid? tenantId) => new(
         new DbContextOptionsBuilder<ApplicationDbContext>().UseNpgsql(connectionString).Options,

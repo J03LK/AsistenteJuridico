@@ -270,30 +270,43 @@ internal sealed class AiApiFactory : WebApplicationFactory<Program>
         services.AddScoped<IAIProvider>(sp => sp.GetRequiredService<OpenAICompatibleProvider>());
     };
 
-    public void EnsureTenant()
+    public void EnsureTenant() => EnsureTenant(TenantId, TenantSlug);
+
+    private void EnsureTenant(Guid tenantId, string slug)
     {
         using var scope = Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        if (db.Tenants.Any(t => t.Id == TenantId))
+        if (db.Tenants.Any(t => t.Id == tenantId))
         {
             return;
         }
 
         db.Tenants.Add(new Tenant
         {
-            Id = TenantId,
+            Id = tenantId,
             Nombre = "Estudio Jurídico Fase 6.2 Test",
-            IdentificadorUrl = TenantSlug,
+            IdentificadorUrl = slug,
             Ruc = "1790016919001",
             Activo = true
         });
         db.SaveChanges();
     }
 
-    /// <summary>Crea el usuario en el tenant de prueba y devuelve un JWT válido para él.</summary>
-    public string CreateUserToken(Guid userId, string role)
+    /// <summary>Crea un tenant adicional (distinto del tenant principal del host) y devuelve su identidad.</summary>
+    public (Guid TenantId, string TenantSlug) CreateAdditionalTenant()
     {
-        EnsureTenant();
+        var tenant = (Guid.NewGuid(), $"fase62-{Guid.NewGuid():N}");
+        EnsureTenant(tenant.Item1, tenant.Item2);
+        return tenant;
+    }
+
+    /// <summary>Crea el usuario en el tenant de prueba y devuelve un JWT válido para él.</summary>
+    public string CreateUserToken(Guid userId, string role) => CreateUserToken(userId, role, TenantId, TenantSlug);
+
+    /// <summary>Crea el usuario en el tenant indicado y devuelve un JWT válido para él.</summary>
+    public string CreateUserToken(Guid userId, string role, Guid tenantId, string tenantSlug)
+    {
+        EnsureTenant(tenantId, tenantSlug);
 
         using (var scope = Services.CreateScope())
         {
@@ -301,7 +314,7 @@ internal sealed class AiApiFactory : WebApplicationFactory<Program>
             db.Usuarios.Add(new Usuario
             {
                 Id = userId,
-                TenantId = TenantId,
+                TenantId = tenantId,
                 UserName = $"usuario_{userId:N}@fase62.test",
                 Email = $"usuario_{userId:N}@fase62.test",
                 NombreCompleto = $"Usuario {role}",
@@ -312,14 +325,14 @@ internal sealed class AiApiFactory : WebApplicationFactory<Program>
         }
 
         var tokenService = new TokenService(Services.GetRequiredService<IConfiguration>());
-        var tenant = new Tenant { Id = TenantId, IdentificadorUrl = TenantSlug, Nombre = "Estudio Jurídico Fase 6.2 Test" };
+        var tenant = new Tenant { Id = tenantId, IdentificadorUrl = tenantSlug, Nombre = "Estudio Jurídico Fase 6.2 Test" };
         var user = new Usuario
         {
             Id = userId,
             Email = $"usuario_{userId:N}@fase62.test",
             NombreCompleto = $"Usuario {role}",
             Rol = role,
-            TenantId = TenantId
+            TenantId = tenantId
         };
 
         var (token, _) = tokenService.GenerateAccessToken(user, tenant, role, Permissions.GetPermissionsForRole(role).ToList());
@@ -383,8 +396,8 @@ internal sealed class AiApiFactory : WebApplicationFactory<Program>
     public HttpRequestMessage Request(HttpMethod method, string url, string token, object? body = null)
     {
         var request = new HttpRequestMessage(method, url);
+        // Sin cabecera X-Tenant-ID: el tenant se toma exclusivamente del JWT
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        request.Headers.Add("X-Tenant-ID", TenantId.ToString());
         if (body != null)
         {
             request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");

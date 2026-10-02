@@ -140,7 +140,9 @@ public class AIProviderException : DomainException
 }
 
 /// <summary>
-/// El proveedor de IA externo no respondió dentro del tiempo máximo configurado (HTTP 502 Bad Gateway).
+/// El proveedor de IA externo no respondió dentro del tiempo máximo configurado (60 s en producción).
+/// Contrato Fase 6: HTTP 502 Bad Gateway con errors ["AI_PROVIDER_TIMEOUT"], NO 504. El timeout se trata
+/// como un error controlado de integración con el proveedor y comparte el contrato 502 de AIProviderException.
 /// </summary>
 public class AIProviderTimeoutException : AIProviderException
 {
