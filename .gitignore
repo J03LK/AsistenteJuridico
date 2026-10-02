@@ -1,0 +1,44 @@
+# ============================================================
+# .gitignore — Asistente Jurídico IA
+# ============================================================
+
+# ── Entorno ──────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ── .NET ─────────────────────────────────────────────────────
+**/bin/
+**/obj/
+*.user
+*.suo
+.vs/
+*.log
+TestResults/
+coverage/
+**/.DS_Store
+
+# ── Angular / Node ───────────────────────────────────────────
+**/node_modules/
+frontend/asistente-juridico/.angular/
+frontend/asistente-juridico/dist/
+frontend/asistente-juridico/coverage/
+
+# ── Docker ───────────────────────────────────────────────────
+docker-compose.override.yml.bak
+
+# ── JetBrains / Riders ───────────────────────────────────────
+.idea/
+*.iml
+
+# ── VS Code ──────────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# ── Secrets / Credenciales ───────────────────────────────────
+*.pfx
+*.p12
+*.key
+secrets.json

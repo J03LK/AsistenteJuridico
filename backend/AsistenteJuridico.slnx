@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AsistenteJuridico.API/AsistenteJuridico.API.csproj" />
+    <Project Path="src/AsistenteJuridico.Application/AsistenteJuridico.Application.csproj" />
+    <Project Path="src/AsistenteJuridico.Domain/AsistenteJuridico.Domain.csproj" />
+    <Project Path="src/AsistenteJuridico.Infrastructure/AsistenteJuridico.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AsistenteJuridico.Domain.Tests/AsistenteJuridico.Domain.Tests.csproj" />
+  </Folder>
+</Solution>

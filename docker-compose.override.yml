@@ -1,0 +1,19 @@
+# ============================================================
+# docker-compose.override.yml — Entorno de Desarrollo Local
+# Sobreescribe docker-compose.yml para desarrollo.
+# Este archivo NO se sube a producción.
+# ============================================================
+
+services:
+
+  postgres:
+    # El puerto se define en docker-compose.yml mediante ${POSTGRES_PORT:-5432}:5432 (5433 en host local)
+
+
+  backend:
+    # En desarrollo usamos modo Development con logs verbose
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      # Permite reload sin reconstruir imagen
+    # Para desarrollo con hot reload, usar: dotnet watch run
+    # desde backend/src/AsistenteJuridico.API
