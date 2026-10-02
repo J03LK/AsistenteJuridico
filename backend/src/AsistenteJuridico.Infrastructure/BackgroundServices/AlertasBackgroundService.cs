@@ -82,7 +82,7 @@ public class AlertasBackgroundService : BackgroundService
         }
     }
 
-    private async Task ProcesarTenantConLockAsync(Guid tenantId, CancellationToken cancellationToken)
+    public async Task ProcesarTenantConLockAsync(Guid tenantId, CancellationToken cancellationToken)
     {
         using var scope = _scopeFactory.CreateScope();
         var tenantService = scope.ServiceProvider.GetRequiredService<ICurrentTenantService>();
@@ -93,30 +93,45 @@ public class AlertasBackgroundService : BackgroundService
 
         long lockKey = AdvisoryLockHelper.ObtenerTenantLockKey(tenantId);
 
-        await using var tx = await context.Database.BeginTransactionAsync(cancellationToken);
+        // La estrategia de reintentos de Npgsql no admite transacciones abiertas fuera de ella: la unidad completa
+        // (transacción, advisory lock, reglas y commit) se ejecuta dentro de la estrategia y, ante un fallo transitorio,
+        // se repite entera desde cero.
+        var strategy = context.Database.CreateExecutionStrategy();
         try
         {
-            // Adquisición atómica de Advisory Lock a nivel de transacción
-            bool adquirido = await context.Database
-                .SqlQueryRaw<bool>("SELECT pg_try_advisory_xact_lock({0})", lockKey)
-                .SingleAsync(cancellationToken);
-
-            if (!adquirido)
+            await strategy.ExecuteAsync(async ct =>
             {
-                _logger.LogDebug("[ADVISORY_LOCK] Tenant {TenantId} ocupado por otra instancia. Omitiendo ciclo.", tenantId);
-                await tx.RollbackAsync(cancellationToken);
-                return;
-            }
+                // Un reintento no debe arrastrar entidades del intento fallido, cuya transacción ya se revirtió.
+                context.ChangeTracker.Clear();
 
-            _logger.LogInformation("[ALERTAS_WORKER] Advisory Lock adquirido para Tenant {TenantId}. Procesando alertas...", tenantId);
-            await alertasService.ProcesarReglasAlertasTenantAsync(tenantId, cancellationToken);
+                await using var tx = await context.Database.BeginTransactionAsync(ct);
 
-            await tx.CommitAsync(cancellationToken);
-            _logger.LogInformation("[ALERTAS_WORKER] Procesamiento completado para Tenant {TenantId}. Lock liberado automáticamente.", tenantId);
+                // Adquisición atómica de Advisory Lock a nivel de transacción
+                bool adquirido = await context.Database
+                    .SqlQueryRaw<bool>("SELECT pg_try_advisory_xact_lock({0}) AS \"Value\"", lockKey)
+                    .SingleAsync(ct);
+
+                if (!adquirido)
+                {
+                    _logger.LogDebug("[ADVISORY_LOCK] Tenant {TenantId} ocupado por otra instancia. Omitiendo ciclo.", tenantId);
+                    await tx.RollbackAsync(ct);
+                    return;
+                }
+
+                _logger.LogInformation("[ALERTAS_WORKER] Advisory Lock adquirido para Tenant {TenantId}. Procesando alertas...", tenantId);
+                await alertasService.ProcesarReglasAlertasTenantAsync(tenantId, ct);
+
+                await tx.CommitAsync(ct);
+                _logger.LogInformation("[ALERTAS_WORKER] Procesamiento completado para Tenant {TenantId}. Lock liberado automáticamente.", tenantId);
+            }, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            await tx.RollbackAsync(cancellationToken);
+            // La transacción ya se revirtió al salir de su bloque; el siguiente ciclo reintentará el tenant.
             _logger.LogError(ex, "[ALERTAS_WORKER_ERROR] Error procesando alertas para Tenant {TenantId}.", tenantId);
         }
     }
