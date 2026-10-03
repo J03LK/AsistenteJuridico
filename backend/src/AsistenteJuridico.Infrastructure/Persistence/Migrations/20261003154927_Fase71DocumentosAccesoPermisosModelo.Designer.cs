@@ -3,6 +3,7 @@ using System;
 using AsistenteJuridico.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace AsistenteJuridico.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261003154927_Fase71DocumentosAccesoPermisosModelo")]
+    partial class Fase71DocumentosAccesoPermisosModelo
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -605,12 +608,7 @@ namespace AsistenteJuridico.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("TenantId", "TipoDocumento");
 
-                    b.ToTable("documentos", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_documentos_HashSha256_formato", "\"HashSha256\" IS NULL OR \"HashSha256\" ~ '^[0-9a-f]{64}$'");
-
-                            t.HasCheckConstraint("CK_documentos_TamanioBytes_no_negativo", "\"TamanioBytes\" >= 0");
-                        });
+                    b.ToTable("documentos", (string)null);
                 });
 
             modelBuilder.Entity("AsistenteJuridico.Domain.Entities.Expediente", b =>

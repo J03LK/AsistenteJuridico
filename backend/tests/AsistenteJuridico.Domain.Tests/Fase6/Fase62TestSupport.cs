@@ -48,9 +48,9 @@ internal sealed class TestFileStorageService : IFileStorageService
     public Task<Stream> OpenReadFileAsync(string relativeFilePath, CancellationToken cancellationToken = default) =>
         Task.FromResult<Stream>(new MemoryStream(Encoding.UTF8.GetBytes(ContentToReturn)));
 
-    public Task<(string PhysicalFileName, string RelativeFilePath, string ContentType, long FileSizeBytes, string Sha256Hash)> SaveFileAsync(
-        Guid tenantId, Stream fileStream, string originalFileName, string declaredContentType, CancellationToken cancellationToken = default) =>
-        Task.FromResult(("f.pdf", "tenant/f.pdf", "application/pdf", 100L, "hash"));
+    public Task<StoredDocumentoFile> SaveDocumentoAsync(
+        Guid tenantId, Guid expedienteId, Stream fileStream, string originalFileName, string? declaredContentType, long? declaredLength, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new StoredDocumentoFile("tenant/f.pdf", "application/pdf", 100L, "hash", "f.pdf"));
 }
 
 /// <summary>

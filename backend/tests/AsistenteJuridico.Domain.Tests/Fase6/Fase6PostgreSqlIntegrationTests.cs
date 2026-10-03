@@ -62,9 +62,9 @@ public class Fase6PostgreSqlIntegrationTests
             var bytes = System.Text.Encoding.UTF8.GetBytes("Contenido procesal de prueba para extracción y resumen jurídico.");
             return Task.FromResult<System.IO.Stream>(new System.IO.MemoryStream(bytes));
         }
-        public Task<(string PhysicalFileName, string RelativeFilePath, string ContentType, long FileSizeBytes, string Sha256Hash)> SaveFileAsync(Guid tenantId, System.IO.Stream fileStream, string originalFileName, string declaredContentType, CancellationToken cancellationToken = default)
+        public Task<StoredDocumentoFile> SaveDocumentoAsync(Guid tenantId, Guid expedienteId, System.IO.Stream fileStream, string originalFileName, string? declaredContentType, long? declaredLength, CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(("f.pdf", "tenant/f.pdf", "application/pdf", 100L, "hash"));
+            return Task.FromResult(new StoredDocumentoFile("tenant/f.pdf", "application/pdf", 100L, "hash", "f.pdf"));
         }
     }
 

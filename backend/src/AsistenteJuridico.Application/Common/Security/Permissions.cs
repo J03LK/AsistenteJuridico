@@ -26,6 +26,7 @@ public static class Permissions
     // Documentos
     public const string DocumentosRead = "Documentos.Read";
     public const string DocumentosUpload = "Documentos.Upload";
+    public const string DocumentosUpdate = "Documentos.Update";
     public const string DocumentosDelete = "Documentos.Delete";
 
     // Procesos SATJE
@@ -86,6 +87,7 @@ public static class Permissions
                 TareasManage,
                 DocumentosRead,
                 DocumentosUpload,
+                DocumentosUpdate,
                 DocumentosDelete,
                 ProcesosRead,
                 ProcesosLink,
@@ -118,6 +120,7 @@ public static class Permissions
                 TareasManage,
                 DocumentosRead,
                 DocumentosUpload,
+                DocumentosUpdate,
                 DocumentosDelete,
                 ProcesosRead,
                 ProcesosLink,
@@ -142,6 +145,7 @@ public static class Permissions
                 TareasManage,
                 DocumentosRead,
                 DocumentosUpload,
+                DocumentosUpdate,
                 ProcesosRead,
                 AudienciasManage,
                 DashboardRead,
@@ -159,8 +163,8 @@ public static class Permissions
                 ClientesRead,
                 TareasRead,
                 TareasManage,
+                // Fase 7 (D2): sin Documentos.Upload; solo lee documentos con tarea vigente en el expediente.
                 DocumentosRead,
-                DocumentosUpload,
                 ProcesosRead,
                 AudienciasManage,
                 DashboardRead,

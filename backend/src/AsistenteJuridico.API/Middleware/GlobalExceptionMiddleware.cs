@@ -39,7 +39,7 @@ public class GlobalExceptionMiddleware
         {
             NotFoundException nfe => (
                 StatusCodes.Status404NotFound,
-                ApiResponse<object>.Fail(nfe.Message)
+                ApiResponse<object>.Fail(nfe.Message, ErroresConCodigo(nfe))
             ),
             UnauthorizedException ue => (
                 StatusCodes.Status401Unauthorized,
@@ -55,11 +55,11 @@ public class GlobalExceptionMiddleware
             ),
             ForbiddenException fe => (
                 StatusCodes.Status403Forbidden,
-                ApiResponse<object>.Fail(fe.Message)
+                ApiResponse<object>.Fail(fe.Message, ErroresConCodigo(fe))
             ),
             ConflictException ce => (
                 StatusCodes.Status409Conflict,
-                ApiResponse<object>.Fail(ce.Message)
+                ApiResponse<object>.Fail(ce.Message, ErroresConCodigo(ce))
             ),
             Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException => (
                 StatusCodes.Status409Conflict,
@@ -79,7 +79,22 @@ public class GlobalExceptionMiddleware
             ),
             ValidationException ve => (
                 StatusCodes.Status400BadRequest,
-                ApiResponse<object>.Fail(ve.Message, ve.ValidationErrors)
+                ApiResponse<object>.Fail(ve.Message, ErroresDeValidacion(ve))
+            ),
+            PayloadTooLargeException ptle => (
+                StatusCodes.Status413PayloadTooLarge,
+                ApiResponse<object>.Fail(ptle.Message, ErroresConCodigo(ptle))
+            ),
+            UnsupportedMediaTypeException umte => (
+                StatusCodes.Status415UnsupportedMediaType,
+                ApiResponse<object>.Fail(umte.Message, ErroresConCodigo(umte))
+            ),
+            // Fase 7.2: exceso del límite de petición de Kestrel/formulario -> 413 con envelope (antes caía en 500).
+            BadHttpRequestException bhre when bhre.StatusCode == StatusCodes.Status413PayloadTooLarge => (
+                StatusCodes.Status413PayloadTooLarge,
+                ApiResponse<object>.Fail(
+                    "La solicitud excede el tamaño máximo permitido.",
+                    EsSubidaDeDocumento(context) ? [DocumentoErrorCodes.SizeExceeded] : null)
             ),
             AIProviderException ape => (
                 StatusCodes.Status502BadGateway,
@@ -127,4 +142,22 @@ public class GlobalExceptionMiddleware
 
         await context.Response.WriteAsync(json);
     }
+
+    /// <summary>
+    /// Fase 7: añade el ErrorCode a <c>errors</c> solo si la excepción lo trae; sin código, la respuesta es la de
+    /// siempre (<c>errors: []</c>).
+    /// </summary>
+    private static IEnumerable<string>? ErroresConCodigo(DomainException exception) =>
+        string.IsNullOrEmpty(exception.ErrorCode) ? null : [exception.ErrorCode];
+
+    /// <summary>
+    /// Fase 7.2: con código, <c>errors: [código, ...mensajes]</c>; sin código, exactamente los mensajes de siempre.
+    /// </summary>
+    private static IEnumerable<string> ErroresDeValidacion(ValidationException exception) =>
+        string.IsNullOrEmpty(exception.ErrorCode)
+            ? exception.ValidationErrors
+            : [exception.ErrorCode, .. exception.ValidationErrors];
+
+    private static bool EsSubidaDeDocumento(HttpContext context) =>
+        context.Request.Path.StartsWithSegments("/api/v1/documentos/upload", StringComparison.OrdinalIgnoreCase);
 }

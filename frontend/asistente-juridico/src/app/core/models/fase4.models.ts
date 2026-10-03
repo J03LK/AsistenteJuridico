@@ -73,8 +73,9 @@ export interface ExpedienteDetailDto extends ExpedienteDto {
   observaciones?: string;
   tareas: TareaDto[];
   audiencias: AudienciaDto[];
-  documentos: DocumentoDto[];
   procesosJudiciales: ExpedienteProcesoJudicialDto[];
+  /** Backend: ExpedienteDetailDto.DocumentosCount (camelCase global). Número de documentos no eliminados. */
+  documentosCount: number;
 }
 
 export interface CreateExpedienteDto {
@@ -221,17 +222,65 @@ export interface UpdateAudienciaDto {
   version: number;
 }
 
+/** Backend: Domain.Enums.EstadoProcesamientoIa (se serializa como número). */
+export enum EstadoProcesamientoIa {
+  Pendiente = 0,
+  Procesando = 1,
+  Procesado = 2,
+  Fallido = 3
+}
+
+/** Fase 7 — Metadatos públicos de un documento (sin ruta física). */
 export interface DocumentoDto {
   id: string;
+  tenantId: string;
   expedienteId: string;
+  expedienteNumero?: string | null;
   titulo: string;
-  descripcion?: string;
-  nombreArchivoOriginal: string;
+  tipoDocumento: string;
+  descripcion?: string | null;
+  /** Null en documentos históricos subidos antes de la Fase 7. */
+  nombreArchivoOriginal?: string | null;
   contentType: string;
-  tamanoBytes: number;
-  sha256Hash: string;
-  versionDocumento: number;
-  uploadedBy: string;
+  tamanioBytes: number;
+  /** Null en documentos históricos sin hash. */
+  hashSha256?: string | null;
+  estadoIa: EstadoProcesamientoIa;
+  estadoIaDescripcion: string;
   createdAt: string;
+  createdBy?: string | null;
+  updatedAt?: string | null;
+  /** xmin de PostgreSQL; se envía en PUT y DELETE. */
   version: number;
 }
+
+/** Filtros de GET /api/v1/documentos. expedienteId es obligatorio. */
+export interface DocumentoFiltro {
+  expedienteId: string;
+  pageNumber?: number;
+  pageSize?: number;
+  tipoDocumento?: string;
+  fechaDesde?: string;
+  fechaHasta?: string;
+  searchTerm?: string;
+}
+
+/** Cuerpo de PUT /api/v1/documentos/{id}: solo campos editables y versión. */
+export interface UpdateDocumentoDto {
+  titulo: string;
+  tipoDocumento: string;
+  descripcion?: string | null;
+  version: number;
+}
+
+/** Códigos DOCUMENT_* que la API emite en errors[]. DOCUMENT_HASH_MISMATCH está reservado (no se emite en Fase 7). */
+export type DocumentoErrorCode =
+  | 'DOCUMENT_NOT_FOUND'
+  | 'DOCUMENT_ACCESS_DENIED'
+  | 'DOCUMENT_FILE_NOT_FOUND'
+  | 'DOCUMENT_TYPE_NOT_ALLOWED'
+  | 'DOCUMENT_MAGIC_BYTES_INVALID'
+  | 'DOCUMENT_SIZE_EXCEEDED'
+  | 'DOCUMENT_CONCURRENCY_CONFLICT'
+  | 'DOCUMENT_PROCESSING'
+  | 'DOCUMENT_HASH_MISMATCH';

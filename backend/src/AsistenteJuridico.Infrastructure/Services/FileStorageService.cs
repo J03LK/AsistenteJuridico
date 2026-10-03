@@ -7,65 +7,52 @@ using Microsoft.Extensions.Logging;
 namespace AsistenteJuridico.Infrastructure.Services;
 
 /// <summary>
-/// Servicio de almacenamiento físico seguro de documentos.
-/// Aplica validación estricta de extensiones, comprobación de Magic Bytes, nombres físicos UUID,
-/// cálculo de SHA-256 en streaming y validación canónica contra ataques de Path Traversal.
-/// 
+/// Servicio de almacenamiento físico seguro de documentos (Fase 7.2).
+/// - Validación de extensión, MIME y contenido con <see cref="DocumentoContentValidator"/>.
+/// - Copia a un temporal en <c>{base}/.tmp</c> con SHA-256 incremental y corte a 25 MiB; movimiento final sin
+///   sobrescribir a <c>{base}/{tenant:N}/{expediente:N}/{guid:N}{ext}</c>; el temporal se elimina siempre.
+/// - Nombre físico siempre GUID + extensión; el nombre original saneado nunca se usa como nombre físico.
+/// - Rutas resueltas solo desde la base de datos, validadas por componentes, contenidas en <c>base + separador</c>
+///   y sin symlinks ni puntos de reanálisis bajo la base (escritura, lectura y eliminación).
+///
 /// LIMITACIÓN DE SEGURIDAD EXPLÍCITA:
-/// La verificación de Magic Bytes valida exclusivamente la firma estructural de cabecera del formato.
+/// La validación de contenido comprueba la firma y la estructura del formato.
 /// NO constituye un motor antivirus, NO analiza contenido activo, scripts incrustados ni macros maliciosas.
 /// </summary>
 public class FileStorageService : IFileStorageService
 {
+    private const string CarpetaTemporal = ".tmp";
+    private const string MensajeTraversal = "Violación de seguridad: Intento de Path Traversal detectado.";
+    private const string MensajeEnlace = "Violación de seguridad: La ruta de almacenamiento contiene un enlace simbólico o punto de reanálisis.";
+
+    private static readonly StringComparison ComparacionRutas =
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static readonly char[] CaracteresInvalidosEnComponente =
+        Path.GetInvalidFileNameChars().Concat(['\\', '/', ':']).Distinct().ToArray();
+
     private readonly string _baseStoragePath;
     private readonly ILogger<FileStorageService> _logger;
-
-    private const long MaxFileSizeBytes = 25 * 1024 * 1024; // 25 MB
-
-    private static readonly Dictionary<string, (string ContentType, byte[][] Signatures)> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        [".pdf"] = ("application/pdf", [
-            [0x25, 0x50, 0x44, 0x46] // %PDF
-        ]),
-        [".docx"] = ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", [
-            [0x50, 0x4B, 0x03, 0x04] // PK.. (ZIP format)
-        ]),
-        [".doc"] = ("application/msword", [
-            [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1] // OLE Compound File
-        ]),
-        [".xlsx"] = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", [
-            [0x50, 0x4B, 0x03, 0x04] // PK.. (ZIP format)
-        ]),
-        [".xls"] = ("application/vnd.ms-excel", [
-            [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1] // OLE Compound File
-        ]),
-        [".png"] = ("image/png", [
-            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] // PNG signature
-        ]),
-        [".jpg"] = ("image/jpeg", [
-            [0xFF, 0xD8, 0xFF] // JPEG SOI
-        ]),
-        [".jpeg"] = ("image/jpeg", [
-            [0xFF, 0xD8, 0xFF] // JPEG SOI
-        ])
-    };
 
     public FileStorageService(IConfiguration configuration, ILogger<FileStorageService> logger)
     {
         _logger = logger;
 
         var configuredPath = configuration["FileStorage:BasePath"];
+        string basePath;
         if (!string.IsNullOrWhiteSpace(configuredPath))
         {
-            _baseStoragePath = Path.GetFullPath(configuredPath);
+            basePath = Path.GetFullPath(configuredPath);
         }
         else
         {
             // Entorno Docker /app/storage o carpeta local de ejecución
-            _baseStoragePath = Directory.Exists("/app/storage")
+            basePath = Directory.Exists("/app/storage")
                 ? "/app/storage"
                 : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "storage"));
         }
+
+        _baseStoragePath = Path.TrimEndingDirectorySeparator(basePath);
 
         if (!Directory.Exists(_baseStoragePath))
         {
@@ -73,105 +60,71 @@ public class FileStorageService : IFileStorageService
         }
     }
 
-    public async Task<(string PhysicalFileName, string RelativeFilePath, string ContentType, long FileSizeBytes, string Sha256Hash)> SaveFileAsync(
+    public async Task<StoredDocumentoFile> SaveDocumentoAsync(
         Guid tenantId,
+        Guid expedienteId,
         Stream fileStream,
         string originalFileName,
-        string declaredContentType,
+        string? declaredContentType,
+        long? declaredLength,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(originalFileName))
+        // 1. Comprobaciones previas a leer el contenido: nombre, extensión (415), MIME (415) y tamaño declarado (413)
+        var nombreOriginal = NombreArchivoSanitizer.Sanitizar(originalFileName);
+        var extension = Path.GetExtension(nombreOriginal).ToLowerInvariant();
+        var formato = DocumentoContentValidator.ObtenerFormato(extension);
+        DocumentoContentValidator.ValidarMimeDeclarado(formato, declaredContentType);
+
+        if (declaredLength > DocumentoContentValidator.MaxFileSizeBytes)
         {
-            throw new ValidationException(["El nombre original del archivo es obligatorio."]);
+            throw TamanioExcedido();
         }
 
-        var extension = Path.GetExtension(originalFileName).ToLowerInvariant();
-        if (!AllowedExtensions.TryGetValue(extension, out var extensionMetadata))
-        {
-            throw new ValidationException([$"La extensión '{extension}' no está permitida. Extensiones admitidas: .pdf, .docx, .doc, .xlsx, .xls, .png, .jpg, .jpeg"]);
-        }
-
-        // Inspeccionar Magic Bytes sin consumir el stream por completo
-        byte[] headerBytes = new byte[8];
-        int bytesRead = await fileStream.ReadAsync(headerBytes.AsMemory(0, 8), cancellationToken);
-        if (bytesRead < 3)
-        {
-            throw new ValidationException(["El archivo está vacío o dañado (tamaño inferior al mínimo de cabecera)."]);
-        }
-
-        var matchesMagicBytes = extensionMetadata.Signatures.Any(sig =>
-            headerBytes.Take(sig.Length).SequenceEqual(sig));
-
-        if (!matchesMagicBytes)
-        {
-            throw new ValidationException([$"El contenido binario no coincide con la extensión declarada '{extension}' (Magic Bytes inválidos)."]);
-        }
-
-        // Reiniciar stream al principio para escritura
-        if (fileStream.CanSeek)
-        {
-            fileStream.Seek(0, SeekOrigin.Begin);
-        }
-        else
-        {
-            throw new InvalidOperationException("El stream del archivo debe permitir Seek para almacenar con verificación de cabecera.");
-        }
-
-        var physicalFileName = $"{Guid.NewGuid():N}{extension}";
-        var tenantFolder = Path.Combine(_baseStoragePath, tenantId.ToString("N"));
-        if (!Directory.Exists(tenantFolder))
-        {
-            Directory.CreateDirectory(tenantFolder);
-        }
-
-        var fullPhysicalPath = Path.Combine(tenantFolder, physicalFileName);
-        var relativePath = Path.Combine(tenantId.ToString("N"), physicalFileName).Replace('\\', '/');
-
-        long totalBytesWritten = 0;
-        string sha256Hex;
+        var carpetaTemporal = Path.Combine(_baseStoragePath, CarpetaTemporal);
+        CrearDirectorioSeguro(carpetaTemporal);
+        var rutaTemporal = Path.Combine(carpetaTemporal, $"{Guid.NewGuid():N}.upload");
 
         try
         {
-            using var sha256 = SHA256.Create();
-            await using (var destinationFileStream = new FileStream(fullPhysicalPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+            // 2. Copia al temporal con SHA-256 incremental, corte al superar 25 MiB y validación de contenido
+            long totalBytes = 0;
+            string sha256Hex;
+            await using (var temporal = new FileStream(rutaTemporal, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 81920, FileOptions.Asynchronous))
             {
+                using var sha256 = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
                 var buffer = new byte[81920];
-                int read;
-                while ((read = await fileStream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
+                int leidos;
+                while ((leidos = await fileStream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
                 {
-                    totalBytesWritten += read;
-                    if (totalBytesWritten > MaxFileSizeBytes)
+                    totalBytes += leidos;
+                    if (totalBytes > DocumentoContentValidator.MaxFileSizeBytes)
                     {
-                        throw new ValidationException(["El archivo excede el tamaño máximo permitido de 25 MB."]);
+                        throw TamanioExcedido();
                     }
 
-                    await destinationFileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                    sha256.TransformBlock(buffer, 0, read, null, 0);
+                    await temporal.WriteAsync(buffer.AsMemory(0, leidos), cancellationToken);
+                    sha256.AppendData(buffer, 0, leidos);
                 }
 
-                sha256.TransformFinalBlock(buffer, 0, 0);
-                sha256Hex = Convert.ToHexString(sha256.Hash!).ToLowerInvariant();
+                sha256Hex = Convert.ToHexString(sha256.GetHashAndReset()).ToLowerInvariant();
+
+                await temporal.FlushAsync(cancellationToken);
+                await DocumentoContentValidator.ValidarContenidoAsync(formato, temporal, cancellationToken);
             }
+
+            // 3. Movimiento al destino final, sin sobrescribir. Nombre físico: GUID + extensión.
+            var rutaRelativa = $"{tenantId:N}/{expedienteId:N}/{Guid.NewGuid():N}{extension}";
+            var rutaFinal = ResolveAndValidatePath(rutaRelativa);
+            CrearDirectorioSeguro(Path.GetDirectoryName(rutaFinal)!);
+            File.Move(rutaTemporal, rutaFinal, overwrite: false);
+
+            return new StoredDocumentoFile(rutaRelativa, formato.ContentTypeCanonico, totalBytes, sha256Hex, nombreOriginal);
         }
-        catch
+        finally
         {
-            // Compensación inmediata si falla la escritura física o excede el tamaño
-            if (File.Exists(fullPhysicalPath))
-            {
-                try
-                {
-                    File.Delete(fullPhysicalPath);
-                }
-                catch (Exception cleanupEx)
-                {
-                    _logger.LogWarning(cleanupEx, "No se pudo eliminar el archivo huérfano en {Path}", fullPhysicalPath);
-                }
-            }
-
-            throw;
+            // 4. El temporal se elimina siempre (éxito ya movido, validación, cancelación, exceso o error de E/S)
+            EliminarTemporal(rutaTemporal);
         }
-
-        return (physicalFileName, relativePath, extensionMetadata.ContentType, totalBytesWritten, sha256Hex);
     }
 
     public Task<Stream> OpenReadFileAsync(string relativeFilePath, CancellationToken cancellationToken = default)
@@ -187,6 +140,10 @@ public class FileStorageService : IFileStorageService
         return Task.FromResult<Stream>(stream);
     }
 
+    /// <summary>
+    /// Compensación: borra el archivo si existe. Aplica las mismas defensas que la lectura; si la ruta no es
+    /// segura no borra nada y deja constancia en el log (no lanza, para no ocultar el error original).
+    /// </summary>
     public Task DeleteFileIfExistsAsync(string? relativeFilePath, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(relativeFilePath))
@@ -208,6 +165,12 @@ public class FileStorageService : IFileStorageService
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Resuelve una ruta relativa guardada en la base de datos. Cada componente (separados por '/') no puede estar
+    /// vacío, ser '.' o '..', empezar por '.', ni contener '\', ':' u otro carácter inválido; la ruta resultante debe
+    /// quedar bajo <c>base + separador</c> y no atravesar symlinks ni puntos de reanálisis. Violación -> 403.
+    /// Las rutas antiguas ({tenant}/{archivo}) siguen siendo válidas.
+    /// </summary>
     private string ResolveAndValidatePath(string relativeFilePath)
     {
         if (string.IsNullOrWhiteSpace(relativeFilePath))
@@ -215,22 +178,118 @@ public class FileStorageService : IFileStorageService
             throw new ValidationException(["La ruta relativa del archivo es inválida."]);
         }
 
-        var normalizedRelative = relativeFilePath.Replace('\\', '/').TrimStart('/');
-        var fullPath = Path.GetFullPath(Path.Combine(_baseStoragePath, normalizedRelative));
-        var baseFullPath = Path.GetFullPath(_baseStoragePath);
-
-        // Protección determinista contra Path Traversal
-        if (!fullPath.StartsWith(baseFullPath, StringComparison.OrdinalIgnoreCase))
+        if (Path.IsPathRooted(relativeFilePath) || relativeFilePath.StartsWith('/') || relativeFilePath.StartsWith('\\'))
         {
-            throw new ForbiddenException("Violación de seguridad: Intento de Path Traversal detectado.");
+            throw Traversal(relativeFilePath);
         }
 
-        var relativeCheck = Path.GetRelativePath(baseFullPath, fullPath);
-        if (relativeCheck.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relativeCheck))
+        var componentes = relativeFilePath.Split('/');
+        foreach (var componente in componentes)
         {
-            throw new ForbiddenException("Violación de seguridad: Intento de Path Traversal detectado.");
+            if (componente.Length == 0
+                || componente.StartsWith('.')
+                || componente.IndexOfAny(CaracteresInvalidosEnComponente) >= 0)
+            {
+                throw Traversal(relativeFilePath);
+            }
         }
 
+        var fullPath = Path.GetFullPath(Path.Combine([_baseStoragePath, .. componentes]));
+        if (!RutaContenidaEnBase(_baseStoragePath, fullPath))
+        {
+            throw Traversal(relativeFilePath);
+        }
+
+        AsegurarSinEnlacesBajoLaBase(fullPath);
         return fullPath;
     }
+
+    /// <summary>
+    /// Defensa en profundidad: la ruta completa debe empezar por <c>base + separador</c> (no basta con el texto de
+    /// la base, que también es prefijo de una carpeta vecina como <c>storage-evil</c>). Sin distinguir mayúsculas
+    /// solo en Windows. La base misma no cuenta como contenida.
+    /// </summary>
+    public static bool RutaContenidaEnBase(string basePath, string fullPath)
+    {
+        var baseConSeparador = Path.TrimEndingDirectorySeparator(Path.GetFullPath(basePath)) + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(fullPath).StartsWith(baseConSeparador, ComparacionRutas);
+    }
+
+    /// <summary>
+    /// Rechaza cualquier symlink, junction o punto de reanálisis en los componentes existentes bajo la base
+    /// (incluido el propio archivo). La base puede ser un montaje (por ejemplo, un volumen de Docker).
+    /// </summary>
+    private void AsegurarSinEnlacesBajoLaBase(string fullPath)
+    {
+        var relativa = Path.GetRelativePath(_baseStoragePath, fullPath);
+        var actual = _baseStoragePath;
+        foreach (var componente in relativa.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            actual = Path.Combine(actual, componente);
+
+            FileAttributes atributos;
+            try
+            {
+                atributos = File.GetAttributes(actual);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // Un symlink roto no existe para GetAttributes; se detecta por su destino de enlace.
+                if (new FileInfo(actual).LinkTarget != null)
+                {
+                    throw Enlace(actual);
+                }
+
+                return; // El resto de la ruta todavía no existe
+            }
+
+            if ((atributos & FileAttributes.ReparsePoint) != 0)
+            {
+                throw Enlace(actual);
+            }
+        }
+    }
+
+    /// <summary>Crea un directorio bajo la base comprobando que no haya enlaces antes y después de crearlo.</summary>
+    private void CrearDirectorioSeguro(string directorio)
+    {
+        AsegurarSinEnlacesBajoLaBase(directorio);
+        Directory.CreateDirectory(directorio);
+        AsegurarSinEnlacesBajoLaBase(directorio);
+    }
+
+    private void EliminarTemporal(string rutaTemporal)
+    {
+        try
+        {
+            if (File.Exists(rutaTemporal))
+            {
+                File.Delete(rutaTemporal);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo eliminar el archivo temporal de subida {Path}", Path.GetFileName(rutaTemporal));
+        }
+    }
+
+    private ForbiddenException Traversal(string rutaRelativa)
+    {
+        _logger.LogWarning("[STORAGE_PATH_TRAVERSAL] Ruta de almacenamiento rechazada: {Path}", rutaRelativa);
+        return new ForbiddenException(MensajeTraversal);
+    }
+
+    private ForbiddenException Enlace(string rutaCompleta)
+    {
+        _logger.LogWarning(
+            "[STORAGE_REPARSE_POINT] Enlace simbólico o punto de reanálisis bajo la base de almacenamiento: {Path}",
+            Path.GetRelativePath(_baseStoragePath, rutaCompleta));
+        return new ForbiddenException(MensajeEnlace);
+    }
+
+    private static PayloadTooLargeException TamanioExcedido() =>
+        new($"El archivo excede el tamaño máximo permitido de {DocumentoContentValidator.MaxFileSizeBytes / (1024 * 1024)} MiB.")
+        {
+            ErrorCode = DocumentoErrorCodes.SizeExceeded
+        };
 }

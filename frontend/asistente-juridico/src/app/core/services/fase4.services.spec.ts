@@ -1,12 +1,12 @@
 import { TestBed } from '@angular/core/testing';
-import { provideHttpClient } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ClienteService } from './cliente.service';
 import { ExpedienteService } from './expediente.service';
 import { ProcesoJudicialService } from './proceso-judicial.service';
 import { TareaService } from './tarea.service';
 import { AudienciaService } from './audiencia.service';
-import { DocumentoService } from './documento.service';
+import { DocumentoService, nombreDescargaDocumento } from './documento.service';
 import {
   ClienteDto,
   CreateClienteDto,
@@ -17,7 +17,9 @@ import {
   ProcesoJudicialDto,
   TareaDto,
   AudienciaDto,
-  DocumentoDto
+  DocumentoDto,
+  DocumentoErrorCode,
+  EstadoProcesamientoIa
 } from '../models/fase4.models';
 import { ApiResponse } from '../models/auth.models';
 
@@ -157,8 +159,8 @@ describe('Phase 4 Services Tests', () => {
           version: 1,
           tareas: [],
           audiencias: [],
-          documentos: [],
-          procesosJudiciales: []
+          procesosJudiciales: [],
+          documentosCount: 0
         },
         message: 'Detalle de expediente',
         errors: [],
@@ -258,38 +260,220 @@ describe('Phase 4 Services Tests', () => {
   });
 
   describe('DocumentoService', () => {
-    it('should upload a document with FormData', () => {
-      const dummyFile = new File(['%PDF-1.4 test'], 'demanda.pdf', { type: 'application/pdf' });
-      const mockDocResponse: ApiResponse<DocumentoDto> = {
+    const documentosUrl = 'http://localhost:5270/api/v1/documentos';
+
+    const documento = (overrides: Partial<DocumentoDto> = {}): DocumentoDto => ({
+      id: 'doc-1',
+      tenantId: 't-1',
+      expedienteId: 'exp-1',
+      expedienteNumero: 'EXP-2026-0001',
+      titulo: 'Demanda Inicial',
+      tipoDocumento: 'Demanda',
+      descripcion: 'Escrito inicial',
+      nombreArchivoOriginal: 'demanda.pdf',
+      contentType: 'application/pdf',
+      tamanioBytes: 14,
+      hashSha256: 'a'.repeat(64),
+      estadoIa: EstadoProcesamientoIa.Pendiente,
+      estadoIaDescripcion: 'Pendiente',
+      createdAt: new Date().toISOString(),
+      createdBy: 'abogado@test.ec',
+      updatedAt: null,
+      version: 1234,
+      ...overrides
+    });
+
+    const errorBody = (code: DocumentoErrorCode) => ({
+      success: false,
+      data: null,
+      message: 'Error',
+      errors: [code],
+      timestamp: new Date().toISOString()
+    });
+
+    it('getDocumentos usa GET /api/v1/documentos con expedienteId, paginación y filtros informados', () => {
+      documentoService.getDocumentos({
+        expedienteId: 'exp-1',
+        pageNumber: 2,
+        pageSize: 25,
+        tipoDocumento: 'Demanda',
+        fechaDesde: '2026-01-01',
+        fechaHasta: '2026-12-31',
+        searchTerm: 'inicial'
+      }).subscribe();
+
+      const req = httpMock.expectOne(r => r.url === documentosUrl);
+      expect(req.request.method).toBe('GET');
+      expect(req.request.url).not.toContain('/documentos/expediente/');
+      const p = req.request.params;
+      expect(p.get('expedienteId')).toBe('exp-1');
+      expect(p.get('pageNumber')).toBe('2');
+      expect(p.get('pageSize')).toBe('25');
+      expect(p.get('tipoDocumento')).toBe('Demanda');
+      expect(p.get('fechaDesde')).toBe('2026-01-01');
+      expect(p.get('fechaHasta')).toBe('2026-12-31');
+      expect(p.get('searchTerm')).toBe('inicial');
+      req.flush({ success: true, data: { items: [], pageNumber: 2, pageSize: 25, totalCount: 0, totalPages: 0, hasPreviousPage: true, hasNextPage: false }, message: '', errors: [], timestamp: '' });
+    });
+
+    it('getDocumentos solo envía los parámetros opcionales que tienen valor', () => {
+      documentoService.getDocumentos({ expedienteId: 'exp-9' }).subscribe();
+
+      const req = httpMock.expectOne(r => r.url === documentosUrl);
+      expect(req.request.params.keys()).toEqual(['expedienteId']);
+      expect(req.request.urlWithParams).toBe(`${documentosUrl}?expedienteId=exp-9`);
+      req.flush({ success: true, data: { items: [], pageNumber: 1, pageSize: 20, totalCount: 0, totalPages: 0, hasPreviousPage: false, hasNextPage: false }, message: '', errors: [], timestamp: '' });
+    });
+
+    it('getDocumentos devuelve PagedResponse<DocumentoDto> con los campos del backend', () => {
+      const historico = documento({ id: 'doc-2', nombreArchivoOriginal: null, hashSha256: null, estadoIa: EstadoProcesamientoIa.Procesado, estadoIaDescripcion: 'Procesado' });
+      const respuesta: ApiResponse<PagedResponse<DocumentoDto>> = {
         success: true,
-        data: {
-          id: 'doc-1',
-          expedienteId: 'exp-1',
-          titulo: 'Demanda Inicial',
-          nombreArchivoOriginal: 'demanda.pdf',
-          contentType: 'application/pdf',
-          tamanoBytes: 14,
-          sha256Hash: 'abc123hash',
-          versionDocumento: 1,
-          uploadedBy: 'abogado@test.ec',
-          createdAt: new Date().toISOString(),
-          version: 1
-        },
-        message: 'Documento subido exitosamente',
+        data: { items: [documento(), historico], pageNumber: 1, pageSize: 20, totalCount: 2, totalPages: 1, hasPreviousPage: false, hasNextPage: false },
+        message: '',
         errors: [],
         timestamp: new Date().toISOString()
       };
+      let recibido: ApiResponse<PagedResponse<DocumentoDto>> | undefined;
 
-      documentoService.uploadDocumento('exp-1', 'Demanda Inicial', dummyFile).subscribe(res => {
-        expect(res.success).toBe(true);
-        expect(res.data.contentType).toBe('application/pdf');
-        expect(res.data.sha256Hash).toBe('abc123hash');
+      documentoService.getDocumentos({ expedienteId: 'exp-1' }).subscribe(res => (recibido = res));
+      httpMock.expectOne(r => r.url === documentosUrl).flush(respuesta);
+
+      expect(recibido).toEqual(respuesta);
+      expect(recibido!.data.totalCount).toBe(2);
+      expect(recibido!.data.items[0].tamanioBytes).toBe(14);
+      expect(recibido!.data.items[0].tipoDocumento).toBe('Demanda');
+      expect(recibido!.data.items[1].nombreArchivoOriginal).toBeNull();
+      expect(recibido!.data.items[1].hashSha256).toBeNull();
+      expect(recibido!.data.items[1].estadoIa).toBe(EstadoProcesamientoIa.Procesado);
+    });
+
+    it('getDocumentoById usa GET /api/v1/documentos/{id}', () => {
+      documentoService.getDocumentoById('doc-7').subscribe();
+      const req = httpMock.expectOne(`${documentosUrl}/doc-7`);
+      expect(req.request.method).toBe('GET');
+      req.flush({ success: true, data: documento({ id: 'doc-7' }), message: '', errors: [], timestamp: '' });
+    });
+
+    it('uploadDocumento envía FormData con expedienteId, titulo, tipoDocumento, file y descripcion (nunca "archivo")', () => {
+      const dummyFile = new File(['%PDF-1.4 test'], 'demanda.pdf', { type: 'application/pdf' });
+
+      documentoService.uploadDocumento('exp-1', 'Demanda Inicial', 'Demanda', dummyFile, 'Escrito inicial').subscribe(res => {
+        expect(res.data.hashSha256).toBe('a'.repeat(64));
       });
 
-      const req = httpMock.expectOne('http://localhost:5270/api/v1/documentos/upload');
+      const req = httpMock.expectOne(`${documentosUrl}/upload`);
       expect(req.request.method).toBe('POST');
-      expect(req.request.body instanceof FormData).toBe(true);
-      req.flush(mockDocResponse);
+      const form = req.request.body as FormData;
+      expect(form instanceof FormData).toBe(true);
+      expect(form.get('expedienteId')).toBe('exp-1');
+      expect(form.get('titulo')).toBe('Demanda Inicial');
+      expect(form.get('tipoDocumento')).toBe('Demanda');
+      expect(form.get('descripcion')).toBe('Escrito inicial');
+      const enviado = form.get('file') as File;
+      expect(enviado instanceof File).toBe(true);
+      expect(enviado.name).toBe('demanda.pdf');
+      expect(form.has('archivo')).toBe(false);
+      expect(Array.from(form.keys()).sort()).toEqual(['descripcion', 'expedienteId', 'file', 'tipoDocumento', 'titulo']);
+      req.flush({ success: true, data: documento(), message: '', errors: [], timestamp: '' });
+    });
+
+    it('uploadDocumento omite descripcion cuando no existe', () => {
+      const dummyFile = new File(['%PDF-1.4 test'], 'demanda.pdf', { type: 'application/pdf' });
+
+      documentoService.uploadDocumento('exp-1', 'Demanda Inicial', 'Demanda', dummyFile).subscribe();
+
+      const form = httpMock.expectOne(`${documentosUrl}/upload`).request.body as FormData;
+      expect(form.has('descripcion')).toBe(false);
+      expect(form.has('archivo')).toBe(false);
+      expect(Array.from(form.keys()).sort()).toEqual(['expedienteId', 'file', 'tipoDocumento', 'titulo']);
+    });
+
+    it('updateDocumento envía EXACTAMENTE titulo, tipoDocumento, descripcion y version aunque reciba un DocumentoDto completo', () => {
+      // Origen con campos protegidos, incluidos los que no forman parte de DocumentoDto
+      const origen = {
+        ...documento({ titulo: 'Título nuevo', tipoDocumento: 'Contrato', descripcion: 'Desc nueva', version: 98765 }),
+        rutaAlmacenamiento: 't-1/exp-1/x.pdf',
+        metadatosJson: '{"resumen":"x"}'
+      };
+
+      documentoService.updateDocumento('doc-1', origen).subscribe();
+
+      const req = httpMock.expectOne(`${documentosUrl}/doc-1`);
+      expect(req.request.method).toBe('PUT');
+      const body = req.request.body as Record<string, unknown>;
+      expect(Object.keys(body).sort()).toEqual(['descripcion', 'tipoDocumento', 'titulo', 'version']);
+      expect(body).toEqual({ titulo: 'Título nuevo', tipoDocumento: 'Contrato', descripcion: 'Desc nueva', version: 98765 });
+      for (const prohibido of ['id', 'tenantId', 'expedienteId', 'rutaAlmacenamiento', 'hashSha256', 'estadoIa', 'metadatosJson', 'createdAt', 'updatedAt']) {
+        expect(prohibido in body).toBe(false);
+      }
+      req.flush({ success: true, data: documento(), message: '', errors: [], timestamp: '' });
+    });
+
+    it('deleteDocumento usa el id y la version recibidos en cada llamada (sin versión fija)', () => {
+      documentoService.deleteDocumento('doc-a', 4242).subscribe();
+      documentoService.deleteDocumento('doc-b', 917).subscribe();
+
+      const peticiones = httpMock.match(r => r.method === 'DELETE');
+      expect(peticiones.length).toBe(2);
+      expect(peticiones[0].request.urlWithParams).toBe(`${documentosUrl}/doc-a?version=4242`);
+      expect(peticiones[0].request.params.get('version')).toBe('4242');
+      expect(peticiones[1].request.urlWithParams).toBe(`${documentosUrl}/doc-b?version=917`);
+      expect(peticiones[1].request.params.get('version')).toBe('917');
+      peticiones.forEach(p => p.flush({ success: true, data: null, message: '', errors: [], timestamp: '' }));
+    });
+
+    it('downloadDocumento pide un blob y devuelve exactamente el Blob recibido, sin depender de Content-Disposition', () => {
+      const blob = new Blob(['%PDF-1.4 contenido'], { type: 'application/pdf' });
+      let recibido: unknown;
+
+      documentoService.downloadDocumento('doc-1').subscribe(res => (recibido = res));
+
+      const req = httpMock.expectOne(`${documentosUrl}/doc-1/download`);
+      expect(req.request.method).toBe('GET');
+      expect(req.request.responseType).toBe('blob');
+      req.flush(blob, { headers: { 'Content-Disposition': 'attachment; filename="otro-nombre.pdf"' } });
+
+      expect(recibido).toBe(blob);
+    });
+
+    it('nombreDescargaDocumento usa nombreArchivoOriginal y, si es null, el titulo', () => {
+      expect(nombreDescargaDocumento(documento({ nombreArchivoOriginal: 'demanda.pdf', titulo: 'Demanda Inicial' }))).toBe('demanda.pdf');
+      expect(nombreDescargaDocumento(documento({ nombreArchivoOriginal: null, titulo: 'Demanda Inicial' }))).toBe('Demanda Inicial');
+    });
+
+    it('preserva errors=[DOCUMENT_CONCURRENCY_CONFLICT] en un 409', () => {
+      let error: HttpErrorResponse | undefined;
+
+      documentoService.updateDocumento('doc-1', { titulo: 'T', tipoDocumento: 'Demanda', descripcion: null, version: 1 })
+        .subscribe({ error: (e: HttpErrorResponse) => (error = e) });
+      httpMock.expectOne(`${documentosUrl}/doc-1`).flush(errorBody('DOCUMENT_CONCURRENCY_CONFLICT'), { status: 409, statusText: 'Conflict' });
+
+      expect(error!.status).toBe(409);
+      expect(error!.error.errors).toEqual(['DOCUMENT_CONCURRENCY_CONFLICT']);
+    });
+
+    it('preserva errors=[DOCUMENT_PROCESSING] en un 409', () => {
+      let error: HttpErrorResponse | undefined;
+
+      documentoService.deleteDocumento('doc-1', 55).subscribe({ error: (e: HttpErrorResponse) => (error = e) });
+      httpMock.expectOne(`${documentosUrl}/doc-1?version=55`).flush(errorBody('DOCUMENT_PROCESSING'), { status: 409, statusText: 'Conflict' });
+
+      expect(error!.status).toBe(409);
+      expect(error!.error.errors).toEqual(['DOCUMENT_PROCESSING']);
+    });
+
+    it('preserva errors=[DOCUMENT_FILE_NOT_FOUND] en el 404 de la descarga (cuerpo de error como Blob)', async () => {
+      let error: HttpErrorResponse | undefined;
+
+      documentoService.downloadDocumento('doc-1').subscribe({ error: (e: HttpErrorResponse) => (error = e) });
+      const cuerpo = new Blob([JSON.stringify(errorBody('DOCUMENT_FILE_NOT_FOUND'))], { type: 'application/json' });
+      httpMock.expectOne(`${documentosUrl}/doc-1/download`).flush(cuerpo, { status: 404, statusText: 'Not Found' });
+
+      expect(error!.status).toBe(404);
+      // Con responseType 'blob' Angular entrega el cuerpo de error como Blob; el código llega intacto
+      const json = JSON.parse(await (error!.error as Blob).text());
+      expect(json.errors).toEqual(['DOCUMENT_FILE_NOT_FOUND']);
     });
   });
 });

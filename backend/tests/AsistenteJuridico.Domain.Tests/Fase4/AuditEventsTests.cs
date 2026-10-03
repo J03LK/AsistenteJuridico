@@ -417,7 +417,13 @@ public class AuditEventsTests
         var tenantService = new MockCurrentTenantService { TenantId = _tenantId };
         var userService = new MockCurrentUserService { TenantId = _tenantId };
         var trackingAudit = new TrackingAuditService();
-        var context = CreateDbContext(tenantService);
+        // Fase 7.3: el DELETE exige una versión xmin positiva; InMemory no genera xmin (ver ContextoInMemoryConXmin)
+        var context = new ContextoInMemoryConXmin(
+            new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
+                .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+                .Options,
+            tenantService);
 
         var expedienteId = Guid.NewGuid();
         context.Expedientes.Add(new Expediente
@@ -442,7 +448,9 @@ public class AuditEventsTests
             tenantService,
             userService,
             trackingAudit,
-            new UploadDocumentoValidator());
+            new UploadDocumentoValidator(),
+            new UpdateDocumentoValidator(),
+            new DocumentoFilterValidator());
 
         // 1. Upload
         var pdfBytes = "%PDF-1.4 header and content for test"u8.ToArray();
@@ -455,7 +463,7 @@ public class AuditEventsTests
         var doc = await service.UploadDocumentoAsync(uploadDto, stream, "Demanda.pdf", "application/pdf");
 
         // 2. Delete
-        await service.DeleteDocumentoAsync(doc.Id);
+        await service.DeleteDocumentoAsync(doc.Id, doc.Version);
 
         // Verificaciones
         Assert.Contains(trackingAudit.Records, r => r.Entidad == "Documento" && r.Accion == "UPLOAD");
@@ -531,21 +539,52 @@ public class AuditEventsTests
         Assert.Contains(trackingAudit.Records, r => r.Entidad == "ExpedienteProcesoJudicial" && r.Accion == "UNLINK");
     }
 
+    /// <summary>
+    /// Fase 7.3 — Contexto InMemory que simula el xmin de PostgreSQL para Documento: InMemory no genera row versions
+    /// (quedaría siempre en 0, que la API rechaza con 400), así que aquí Version la asigna este contexto en cada
+    /// inserción o modificación, igual que PostgreSQL, y sigue siendo token de concurrencia.
+    /// </summary>
+    private sealed class ContextoInMemoryConXmin(DbContextOptions<ApplicationDbContext> options, ICurrentTenantService tenantService)
+        : ApplicationDbContext(options, tenantService)
+    {
+        private uint _siguienteXmin = 1000;
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+            modelBuilder.Entity<Documento>().Property(d => d.Version).ValueGeneratedNever();
+        }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            ChangeTracker.DetectChanges();
+            foreach (var entrada in ChangeTracker.Entries<Documento>()
+                         .Where(e => e.State is EntityState.Added or EntityState.Modified))
+            {
+                entrada.Property(d => d.Version).CurrentValue = ++_siguienteXmin;
+            }
+
+            return base.SaveChangesAsync(cancellationToken);
+        }
+    }
+
     private class MockFileStorageService : IFileStorageService
     {
-        public Task<(string PhysicalFileName, string RelativeFilePath, string ContentType, long FileSizeBytes, string Sha256Hash)> SaveFileAsync(
+        public Task<StoredDocumentoFile> SaveDocumentoAsync(
             Guid tenantId,
+            Guid expedienteId,
             Stream fileStream,
             string originalFileName,
-            string declaredContentType,
+            string? declaredContentType,
+            long? declaredLength,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult((
-                "doc-uuid.pdf",
+            return Task.FromResult(new StoredDocumentoFile(
                 $"storage/{tenantId}/doc-uuid.pdf",
                 "application/pdf",
                 1024L,
-                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "Demanda.pdf"
             ));
         }
 

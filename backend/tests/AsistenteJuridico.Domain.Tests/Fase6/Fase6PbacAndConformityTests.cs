@@ -73,9 +73,9 @@ public class Fase6PbacAndConformityTests
             var bytes = System.Text.Encoding.UTF8.GetBytes(ContentToReturn);
             return Task.FromResult<Stream>(new MemoryStream(bytes));
         }
-        public Task<(string PhysicalFileName, string RelativeFilePath, string ContentType, long FileSizeBytes, string Sha256Hash)> SaveFileAsync(Guid tenantId, Stream fileStream, string originalFileName, string declaredContentType, CancellationToken cancellationToken = default)
+        public Task<StoredDocumentoFile> SaveDocumentoAsync(Guid tenantId, Guid expedienteId, Stream fileStream, string originalFileName, string? declaredContentType, long? declaredLength, CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(("f.pdf", "tenant/f.pdf", "application/pdf", 100L, "hash"));
+            return Task.FromResult(new StoredDocumentoFile("tenant/f.pdf", "application/pdf", 100L, "hash", "f.pdf"));
         }
     }
 

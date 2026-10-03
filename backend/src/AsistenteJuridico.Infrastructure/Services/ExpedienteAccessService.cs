@@ -189,6 +189,12 @@ public class ExpedienteAccessService : IExpedienteAccessService
 
     public async Task<Documento> EnsureCanAccessDocumentoAsync(Guid documentoId, bool requireWriteAccess = false, CancellationToken cancellationToken = default)
     {
+        // Fase 7: el bloqueo de SuperAdmin es explícito y no depende de que el documento tenga expediente.
+        if (_currentUserService.Role == Roles.SuperAdmin)
+        {
+            throw new ForbiddenException("Los administradores globales (SuperAdmin) no tienen acceso a documentos jurídicos.");
+        }
+
         var currentTenantId = _currentTenantService.TenantId;
         if (!currentTenantId.HasValue)
         {
@@ -210,34 +216,53 @@ public class ExpedienteAccessService : IExpedienteAccessService
             throw new ForbiddenException("Acceso denegado: El documento pertenece a otro estudio jurídico.");
         }
 
-        if (documento.Expediente != null)
+        // Fase 7 (D-3): un documento cuyo expediente está eliminado se trata como inexistente (404). La consulta usa
+        // IgnoreQueryFilters, que también carga expedientes eliminados, así que se comprueba aquí explícitamente.
+        // Con ExpedienteId NOT NULL (D-4) las reglas de rol se aplican siempre: ya no hay documentos sin expediente.
+        if (documento.Expediente == null || documento.Expediente.IsDeleted)
         {
-            await EnsureCanAccessExpedienteAsync(documento.Expediente, requireWriteAccess, cancellationToken);
+            throw new NotFoundException(nameof(Documento), documentoId);
         }
 
-        // Regla documental de AsistenteLegal (Fase 6 v1.1.1, precisada en Fase 6.2):
-        // Con al menos una tarea VIGENTE (ver EstadosTareaQueHabilitanAccesoDocumental) asignada al usuario
-        // en el expediente del documento y dentro del mismo tenant -> permitido.
-        // En cualquier otro caso (sin tarea, tarea completada o cancelada, otro expediente, otro tenant)
-        // -> HTTP 403 Forbidden.
-        var role = _currentUserService.Role;
-        var currentUserId = _currentUserService.UserId;
-        if (role == Roles.AsistenteLegal && documento.ExpedienteId.HasValue)
-        {
-            var estadosPermitidos = EstadosTareaQueHabilitanAccesoDocumental.ToArray();
-            var hasTask = await _context.Tareas
-                .AnyAsync(t => t.TenantId == currentTenantId.Value
-                    && t.ExpedienteId == documento.ExpedienteId.Value
-                    && t.AsignadoAUsuarioId == currentUserId
-                    && estadosPermitidos.Contains(t.Estado), cancellationToken);
-
-            if (!hasTask)
-            {
-                throw new ForbiddenException("Un Asistente Legal solo puede acceder a documentos de expedientes en los cuales tiene una tarea asignada.");
-            }
-        }
+        await EnsureCanAccessExpedienteAsync(documento.Expediente, requireWriteAccess, cancellationToken);
+        await EnsureAsistenteLegalConTareaVigenteAsync(documento.ExpedienteId, currentTenantId.Value, cancellationToken);
 
         return documento;
+    }
+
+    public async Task EnsureCanAccessDocumentosDeExpedienteAsync(Guid expedienteId, CancellationToken cancellationToken = default)
+    {
+        // Fase 7 (D-1): el listado aplica la misma regla documental que el detalle.
+        await EnsureCanAccessExpedienteAsync(expedienteId, requireWriteAccess: false, cancellationToken);
+        await EnsureAsistenteLegalConTareaVigenteAsync(expedienteId, _currentTenantService.TenantId!.Value, cancellationToken);
+    }
+
+    /// <summary>
+    /// Regla documental de AsistenteLegal (Fase 6 v1.1.1, precisada en Fase 6.2):
+    /// con al menos una tarea VIGENTE (ver EstadosTareaQueHabilitanAccesoDocumental) asignada al usuario
+    /// en el expediente y dentro del mismo tenant -> permitido.
+    /// En cualquier otro caso (sin tarea, tarea completada o cancelada, otro expediente, otro tenant)
+    /// -> HTTP 403 Forbidden. Para el resto de roles no hace nada.
+    /// </summary>
+    private async Task EnsureAsistenteLegalConTareaVigenteAsync(Guid expedienteId, Guid tenantId, CancellationToken cancellationToken)
+    {
+        if (_currentUserService.Role != Roles.AsistenteLegal)
+        {
+            return;
+        }
+
+        var currentUserId = _currentUserService.UserId;
+        var estadosPermitidos = EstadosTareaQueHabilitanAccesoDocumental.ToArray();
+        var hasTask = await _context.Tareas
+            .AnyAsync(t => t.TenantId == tenantId
+                && t.ExpedienteId == expedienteId
+                && t.AsignadoAUsuarioId == currentUserId
+                && estadosPermitidos.Contains(t.Estado), cancellationToken);
+
+        if (!hasTask)
+        {
+            throw new ForbiddenException("Un Asistente Legal solo puede acceder a documentos de expedientes en los cuales tiene una tarea asignada.");
+        }
     }
 
     public async Task EnsureCanAccessProcesoAsync(Guid procesoId, CancellationToken cancellationToken = default)

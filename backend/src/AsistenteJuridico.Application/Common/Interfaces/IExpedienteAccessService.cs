@@ -16,5 +16,11 @@ public interface IExpedienteAccessService
     Task<Tarea> EnsureCanAccessTareaAsync(Guid tareaId, bool requireWriteAccess = false, CancellationToken cancellationToken = default);
     Task<Audiencia> EnsureCanAccessAudienciaAsync(Guid audienciaId, bool requireWriteAccess = false, CancellationToken cancellationToken = default);
     Task<Documento> EnsureCanAccessDocumentoAsync(Guid documentoId, bool requireWriteAccess = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Acceso de lectura al listado de documentos de un expediente: las reglas del expediente más la regla
+    /// documental del AsistenteLegal (tarea vigente asignada en ese expediente).
+    /// </summary>
+    Task EnsureCanAccessDocumentosDeExpedienteAsync(Guid expedienteId, CancellationToken cancellationToken = default);
     Task EnsureCanAccessProcesoAsync(Guid procesoId, CancellationToken cancellationToken = default);
 }

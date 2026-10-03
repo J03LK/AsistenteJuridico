@@ -6,6 +6,31 @@ namespace AsistenteJuridico.Application.Common.Exceptions;
 public abstract class DomainException : Exception
 {
     protected DomainException(string message) : base(message) { }
+
+    /// <summary>
+    /// Código de error opcional (Fase 7, aditivo). Si es nulo, la respuesta HTTP es idéntica a la de las Fases 0–6.
+    /// GlobalExceptionMiddleware lo añade a <c>errors</c> solo en las respuestas 404, 403 y 409; las excepciones que
+    /// ya tenían código propio en la Fase 6 lo sobrescriben y mantienen exactamente su respuesta anterior.
+    /// </summary>
+    public virtual string? ErrorCode { get; init; }
+}
+
+/// <summary>
+/// Códigos de error del módulo de documentos (contrato Fase 7). Solo los emite la capa de documentos.
+/// </summary>
+public static class DocumentoErrorCodes
+{
+    public const string NotFound = "DOCUMENT_NOT_FOUND";
+    public const string AccessDenied = "DOCUMENT_ACCESS_DENIED";
+    public const string FileNotFound = "DOCUMENT_FILE_NOT_FOUND";
+    public const string TypeNotAllowed = "DOCUMENT_TYPE_NOT_ALLOWED";
+    public const string MagicBytesInvalid = "DOCUMENT_MAGIC_BYTES_INVALID";
+    public const string SizeExceeded = "DOCUMENT_SIZE_EXCEEDED";
+    public const string ConcurrencyConflict = "DOCUMENT_CONCURRENCY_CONFLICT";
+    public const string Processing = "DOCUMENT_PROCESSING";
+
+    /// <summary>Reservado para la verificación o reconciliación futura; no se emite en la Fase 7.</summary>
+    public const string HashMismatch = "DOCUMENT_HASH_MISMATCH";
 }
 
 /// <summary>
@@ -95,11 +120,27 @@ public class ValidationException : DomainException
 }
 
 /// <summary>
+/// El contenido enviado supera el tamaño máximo permitido (HTTP 413). Fase 7.2.
+/// </summary>
+public class PayloadTooLargeException : DomainException
+{
+    public PayloadTooLargeException(string message) : base(message) { }
+}
+
+/// <summary>
+/// Tipo de contenido no admitido: extensión fuera de la lista o MIME contradictorio (HTTP 415). Fase 7.2.
+/// </summary>
+public class UnsupportedMediaTypeException : DomainException
+{
+    public UnsupportedMediaTypeException(string message) : base(message) { }
+}
+
+/// <summary>
 /// Documento excede el límite máximo de caracteres para análisis IA (HTTP 422).
 /// </summary>
 public class DocumentContextExceededException : BusinessRuleException
 {
-    public string ErrorCode => "DOCUMENT_EXCEEDS_CONTEXT_LIMIT";
+    public override string ErrorCode => "DOCUMENT_EXCEEDS_CONTEXT_LIMIT";
 
     public DocumentContextExceededException(int length, int limit = 30000)
         : base($"DOCUMENT_EXCEEDS_CONTEXT_LIMIT: El documento contiene {length} caracteres, superando el límite máximo permitido de {limit} caracteres.") { }
@@ -110,7 +151,7 @@ public class DocumentContextExceededException : BusinessRuleException
 /// </summary>
 public class AIContextWindowExceededException : BusinessRuleException
 {
-    public string ErrorCode => "AI_CONTEXT_WINDOW_EXCEEDED";
+    public override string ErrorCode => "AI_CONTEXT_WINDOW_EXCEEDED";
 
     public AIContextWindowExceededException(int estimatedTokens, int maxTokens)
         : base($"AI_CONTEXT_WINDOW_EXCEEDED: El contexto total ({estimatedTokens} tokens estimados) supera la ventana máxima del proveedor ({maxTokens} tokens).") { }
@@ -121,7 +162,7 @@ public class AIContextWindowExceededException : BusinessRuleException
 /// </summary>
 public class UserInputLimitExceededException : BusinessRuleException
 {
-    public string ErrorCode => "USER_INPUT_LIMIT_EXCEEDED";
+    public override string ErrorCode => "USER_INPUT_LIMIT_EXCEEDED";
 
     public UserInputLimitExceededException(int length, int limit = 4000)
         : base($"USER_INPUT_LIMIT_EXCEEDED: La entrada del usuario ({length} caracteres) supera el límite máximo permitido de {limit} caracteres.") { }
@@ -133,7 +174,7 @@ public class UserInputLimitExceededException : BusinessRuleException
 /// </summary>
 public class AIProviderException : DomainException
 {
-    public virtual string ErrorCode => "AI_PROVIDER_ERROR";
+    public override string ErrorCode => "AI_PROVIDER_ERROR";
 
     public AIProviderException(string message = "El proveedor de inteligencia artificial no se encuentra disponible temporalmente. Intente nuevamente más tarde.")
         : base(message) { }
@@ -157,7 +198,7 @@ public class AIProviderTimeoutException : AIProviderException
 /// </summary>
 public class TooManyRequestsException : DomainException
 {
-    public string ErrorCode => "TOO_MANY_REQUESTS";
+    public override string ErrorCode => "TOO_MANY_REQUESTS";
 
     public TooManyRequestsException(string message = "Se ha superado la cuota o límite de tasa de solicitudes (Rate Limit). Intente más tarde.")
         : base(message) { }
