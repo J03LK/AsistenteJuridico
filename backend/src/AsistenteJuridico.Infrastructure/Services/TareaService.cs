@@ -256,41 +256,52 @@ public class TareaService : ITareaService
             throw new AppValidationException(validationResult.Errors.Select(e => e.ErrorMessage));
         }
 
-        var tarea = await _context.Tareas
-            .Include(t => t.Expediente)
-            .Include(t => t.AsignadoA)
-            .FirstOrDefaultAsync(t => t.Id == id, cancellationToken);
+        Tarea tarea = null!;
+        object valoresAnteriores = null!;
 
-        if (tarea == null)
+        // La estrategia de reintentos de Npgsql no admite transacciones abiertas fuera de ella: la carga, la
+        // transacción y el guardado forman una sola unidad que, ante un fallo transitorio, se repite entera.
+        var primerIntento = true;
+        await _context.Database.CreateExecutionStrategy().ExecuteAsync(async ct =>
         {
-            throw new NotFoundException(nameof(Tarea), id);
-        }
-
-        if (dto.AsignadoAUsuarioId.HasValue && dto.AsignadoAUsuarioId != tarea.AsignadoAUsuarioId)
-        {
-            var exists = await _context.Usuarios
-                .AnyAsync(u => u.Id == dto.AsignadoAUsuarioId.Value && u.TenantId == tarea.TenantId && u.Activo, cancellationToken);
-
-            if (!exists)
+            if (!primerIntento)
             {
-                throw new NotFoundException("El usuario asignado no existe o no pertenece a este estudio.");
+                // El intento fallido ya se revirtió en la base de datos; también se descarta su estado en memoria.
+                _context.ChangeTracker.Clear();
             }
-        }
+            primerIntento = false;
 
-        var valoresAnteriores = new
-        {
-            tarea.Titulo,
-            tarea.FechaVencimiento,
-            tarea.Prioridad,
-            tarea.AsignadoAUsuarioId
-        };
+            tarea = await _context.Tareas
+                .Include(t => t.Expediente)
+                .Include(t => t.AsignadoA)
+                .FirstOrDefaultAsync(t => t.Id == id, ct)
+                ?? throw new NotFoundException(nameof(Tarea), id);
 
-        bool fechaCambio = tarea.FechaVencimiento != dto.FechaVencimiento;
-        var now = DateTime.UtcNow;
+            if (dto.AsignadoAUsuarioId.HasValue && dto.AsignadoAUsuarioId != tarea.AsignadoAUsuarioId)
+            {
+                var exists = await _context.Usuarios
+                    .AnyAsync(u => u.Id == dto.AsignadoAUsuarioId.Value && u.TenantId == tarea.TenantId && u.Activo, ct);
 
-        await using var tx = await _context.Database.BeginTransactionAsync(cancellationToken);
-        try
-        {
+                if (!exists)
+                {
+                    throw new NotFoundException("El usuario asignado no existe o no pertenece a este estudio.");
+                }
+            }
+
+            valoresAnteriores = new
+            {
+                tarea.Titulo,
+                tarea.FechaVencimiento,
+                tarea.Prioridad,
+                tarea.AsignadoAUsuarioId
+            };
+
+            bool fechaCambio = tarea.FechaVencimiento != dto.FechaVencimiento;
+            var now = DateTime.UtcNow;
+
+            // Si algo falla antes del commit, la transacción se revierte al liberarse.
+            await using var tx = await _context.Database.BeginTransactionAsync(ct);
+
             if (fechaCambio)
             {
                 var alertasActivas = await _context.AlertasProcesales
@@ -298,7 +309,7 @@ public class TareaService : ITareaService
                              && a.TipoOrigen == TipoOrigenAlerta.Tarea
                              && a.OrigenId == tarea.Id
                              && a.EstadoResolucion == EstadoAlertaResolucion.Activa)
-                    .ToListAsync(cancellationToken);
+                    .ToListAsync(ct);
 
                 foreach (var a in alertasActivas)
                 {
@@ -362,14 +373,9 @@ public class TareaService : ITareaService
             tarea.UpdatedAt = now;
             tarea.UpdatedBy = _currentUserService.Email;
 
-            await _context.SaveChangesAsync(cancellationToken);
-            await tx.CommitAsync(cancellationToken);
-        }
-        catch
-        {
-            await tx.RollbackAsync(cancellationToken);
-            throw;
-        }
+            await _context.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }, cancellationToken);
 
         await _auditService.LogAsync("Tarea", tarea.Id.ToString(), "UPDATE", valoresAnteriores, new
         {
@@ -410,22 +416,32 @@ public class TareaService : ITareaService
             throw new AppValidationException(validationResult.Errors.Select(e => e.ErrorMessage));
         }
 
-        var tarea = await _context.Tareas
-            .Include(t => t.Expediente)
-            .Include(t => t.AsignadoA)
-            .FirstOrDefaultAsync(t => t.Id == id, cancellationToken);
+        Tarea tarea = null!;
+        var estadoAnterior = default(EstadoTarea);
 
-        if (tarea == null)
+        // Misma unidad reintentable que en UpdateTareaAsync: carga, transacción y guardado.
+        var primerIntento = true;
+        await _context.Database.CreateExecutionStrategy().ExecuteAsync(async ct =>
         {
-            throw new NotFoundException(nameof(Tarea), id);
-        }
+            if (!primerIntento)
+            {
+                // El intento fallido ya se revirtió en la base de datos; también se descarta su estado en memoria.
+                _context.ChangeTracker.Clear();
+            }
+            primerIntento = false;
 
-        var estadoAnterior = tarea.Estado;
-        var now = DateTime.UtcNow;
+            tarea = await _context.Tareas
+                .Include(t => t.Expediente)
+                .Include(t => t.AsignadoA)
+                .FirstOrDefaultAsync(t => t.Id == id, ct)
+                ?? throw new NotFoundException(nameof(Tarea), id);
 
-        await using var tx = await _context.Database.BeginTransactionAsync(cancellationToken);
-        try
-        {
+            estadoAnterior = tarea.Estado;
+            var now = DateTime.UtcNow;
+
+            // Si algo falla antes del commit, la transacción se revierte al liberarse.
+            await using var tx = await _context.Database.BeginTransactionAsync(ct);
+
             if (dto.NuevoEstado == EstadoTarea.Completada || dto.NuevoEstado == EstadoTarea.Cancelada)
             {
                 var alertasActivas = await _context.AlertasProcesales
@@ -433,7 +449,7 @@ public class TareaService : ITareaService
                              && a.TipoOrigen == TipoOrigenAlerta.Tarea
                              && a.OrigenId == tarea.Id
                              && a.EstadoResolucion == EstadoAlertaResolucion.Activa)
-                    .ToListAsync(cancellationToken);
+                    .ToListAsync(ct);
 
                 foreach (var a in alertasActivas)
                 {
@@ -447,7 +463,7 @@ public class TareaService : ITareaService
                         "ALERTA_RESOLUCION_AUTOMATICA",
                         null,
                         new { alertaId = a.Id, motivo = a.MotivoResolucion },
-                        cancellationToken);
+                        ct);
                 }
             }
 
@@ -466,14 +482,9 @@ public class TareaService : ITareaService
             tarea.UpdatedAt = now;
             tarea.UpdatedBy = _currentUserService.Email;
 
-            await _context.SaveChangesAsync(cancellationToken);
-            await tx.CommitAsync(cancellationToken);
-        }
-        catch
-        {
-            await tx.RollbackAsync(cancellationToken);
-            throw;
-        }
+            await _context.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }, cancellationToken);
 
         await _auditService.LogAsync("Tarea", tarea.Id.ToString(), "STATE_CHANGE",
             new { estadoAnterior = estadoAnterior.ToString() },

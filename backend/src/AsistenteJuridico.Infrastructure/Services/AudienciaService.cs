@@ -253,29 +253,40 @@ public class AudienciaService : IAudienciaService
             await _expedienteAccessService.EnsureCanAccessProcesoAsync(dto.ProcesoJudicialId.Value, cancellationToken);
         }
 
-        var audiencia = await _context.Audiencias
-            .Include(a => a.Expediente)
-            .Include(a => a.ProcesoJudicial)
-            .FirstOrDefaultAsync(a => a.Id == id, cancellationToken);
+        Audiencia audiencia = null!;
+        object valoresAnteriores = null!;
 
-        if (audiencia == null)
+        // La estrategia de reintentos de Npgsql no admite transacciones abiertas fuera de ella: la carga, la
+        // transacción y el guardado forman una sola unidad que, ante un fallo transitorio, se repite entera.
+        var primerIntento = true;
+        await _context.Database.CreateExecutionStrategy().ExecuteAsync(async ct =>
         {
-            throw new NotFoundException(nameof(Audiencia), id);
-        }
+            if (!primerIntento)
+            {
+                // El intento fallido ya se revirtió en la base de datos; también se descarta su estado en memoria.
+                _context.ChangeTracker.Clear();
+            }
+            primerIntento = false;
 
-        var valoresAnteriores = new
-        {
-            audiencia.FechaHora,
-            audiencia.SalaOVirtual,
-            audiencia.TipoAudiencia
-        };
+            audiencia = await _context.Audiencias
+                .Include(a => a.Expediente)
+                .Include(a => a.ProcesoJudicial)
+                .FirstOrDefaultAsync(a => a.Id == id, ct)
+                ?? throw new NotFoundException(nameof(Audiencia), id);
 
-        bool fechaCambio = audiencia.FechaHora != dto.FechaHora;
-        var now = DateTime.UtcNow;
+            valoresAnteriores = new
+            {
+                audiencia.FechaHora,
+                audiencia.SalaOVirtual,
+                audiencia.TipoAudiencia
+            };
 
-        await using var tx = await _context.Database.BeginTransactionAsync(cancellationToken);
-        try
-        {
+            bool fechaCambio = audiencia.FechaHora != dto.FechaHora;
+            var now = DateTime.UtcNow;
+
+            // Si algo falla antes del commit, la transacción se revierte al liberarse.
+            await using var tx = await _context.Database.BeginTransactionAsync(ct);
+
             if (fechaCambio)
             {
                 var alertasActivas = await _context.AlertasProcesales
@@ -283,7 +294,7 @@ public class AudienciaService : IAudienciaService
                              && a.TipoOrigen == TipoOrigenAlerta.Audiencia
                              && a.OrigenId == audiencia.Id
                              && a.EstadoResolucion == EstadoAlertaResolucion.Activa)
-                    .ToListAsync(cancellationToken);
+                    .ToListAsync(ct);
 
                 foreach (var a in alertasActivas)
                 {
@@ -349,14 +360,9 @@ public class AudienciaService : IAudienciaService
             audiencia.UpdatedAt = now;
             audiencia.UpdatedBy = _currentUserService.Email;
 
-            await _context.SaveChangesAsync(cancellationToken);
-            await tx.CommitAsync(cancellationToken);
-        }
-        catch
-        {
-            await tx.RollbackAsync(cancellationToken);
-            throw;
-        }
+            await _context.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }, cancellationToken);
 
         await _auditService.LogAsync("Audiencia", audiencia.Id.ToString(), "UPDATE", valoresAnteriores, new
         {
@@ -395,22 +401,32 @@ public class AudienciaService : IAudienciaService
             throw new AppValidationException(validationResult.Errors.Select(e => e.ErrorMessage));
         }
 
-        var audiencia = await _context.Audiencias
-            .Include(a => a.Expediente)
-            .Include(a => a.ProcesoJudicial)
-            .FirstOrDefaultAsync(a => a.Id == id, cancellationToken);
+        Audiencia audiencia = null!;
+        var estadoAnterior = default(EstadoAudiencia);
 
-        if (audiencia == null)
+        // Misma unidad reintentable que en UpdateAudienciaAsync: carga, transacción y guardado.
+        var primerIntento = true;
+        await _context.Database.CreateExecutionStrategy().ExecuteAsync(async ct =>
         {
-            throw new NotFoundException(nameof(Audiencia), id);
-        }
+            if (!primerIntento)
+            {
+                // El intento fallido ya se revirtió en la base de datos; también se descarta su estado en memoria.
+                _context.ChangeTracker.Clear();
+            }
+            primerIntento = false;
 
-        var estadoAnterior = audiencia.Estado;
-        var now = DateTime.UtcNow;
+            audiencia = await _context.Audiencias
+                .Include(a => a.Expediente)
+                .Include(a => a.ProcesoJudicial)
+                .FirstOrDefaultAsync(a => a.Id == id, ct)
+                ?? throw new NotFoundException(nameof(Audiencia), id);
 
-        await using var tx = await _context.Database.BeginTransactionAsync(cancellationToken);
-        try
-        {
+            estadoAnterior = audiencia.Estado;
+            var now = DateTime.UtcNow;
+
+            // Si algo falla antes del commit, la transacción se revierte al liberarse.
+            await using var tx = await _context.Database.BeginTransactionAsync(ct);
+
             if (dto.NuevoEstado == EstadoAudiencia.Cancelada || dto.NuevoEstado == EstadoAudiencia.Realizada)
             {
                 var alertasActivas = await _context.AlertasProcesales
@@ -418,7 +434,7 @@ public class AudienciaService : IAudienciaService
                              && a.TipoOrigen == TipoOrigenAlerta.Audiencia
                              && a.OrigenId == audiencia.Id
                              && a.EstadoResolucion == EstadoAlertaResolucion.Activa)
-                    .ToListAsync(cancellationToken);
+                    .ToListAsync(ct);
 
                 foreach (var a in alertasActivas)
                 {
@@ -432,7 +448,7 @@ public class AudienciaService : IAudienciaService
                         "ALERTA_RESOLUCION_AUTOMATICA",
                         null,
                         new { alertaId = a.Id, motivo = a.MotivoResolucion },
-                        cancellationToken);
+                        ct);
                 }
             }
 
@@ -442,14 +458,9 @@ public class AudienciaService : IAudienciaService
             audiencia.UpdatedAt = now;
             audiencia.UpdatedBy = _currentUserService.Email;
 
-            await _context.SaveChangesAsync(cancellationToken);
-            await tx.CommitAsync(cancellationToken);
-        }
-        catch
-        {
-            await tx.RollbackAsync(cancellationToken);
-            throw;
-        }
+            await _context.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }, cancellationToken);
 
         await _auditService.LogAsync("Audiencia", audiencia.Id.ToString(), "STATE_CHANGE",
             new { estadoAnterior = estadoAnterior.ToString() },

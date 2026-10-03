@@ -1,17 +1,13 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data.Common;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
-using AsistenteJuridico.Application.Common.Interfaces;
 using AsistenteJuridico.Application.Common.Security;
 using AsistenteJuridico.Application.Features.Audiencias.DTOs;
 using AsistenteJuridico.Domain.Entities;
 using AsistenteJuridico.Domain.Enums;
-using AsistenteJuridico.Infrastructure;
 using AsistenteJuridico.Infrastructure.BackgroundServices;
 using AsistenteJuridico.Infrastructure.Common;
 using AsistenteJuridico.Infrastructure.Persistence;
@@ -19,11 +15,12 @@ using AsistenteJuridico.Infrastructure.Services;
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Xunit;
+
+using static AsistenteJuridico.Domain.Tests.Fase5.ExecutionStrategyTestSupport;
 
 namespace AsistenteJuridico.Domain.Tests.Fase5;
 
@@ -34,31 +31,9 @@ namespace AsistenteJuridico.Domain.Tests.Fase5;
 /// </summary>
 public class AlertasWorkerExecutionStrategyTests
 {
-    private const string ErrorEstrategiaConTransaccion = "does not support user-initiated transactions";
-
     // ─────────────────────────────────────────────────────────────
     // Infraestructura de prueba
     // ─────────────────────────────────────────────────────────────
-
-    private sealed record LogEntry(LogLevel Level, EventId EventId, string Message, Exception? Exception);
-
-    private sealed class CapturingLoggerProvider : ILoggerProvider
-    {
-        public ConcurrentQueue<LogEntry> Entries { get; } = new();
-
-        public ILogger CreateLogger(string categoryName) => new CapturingLogger(Entries);
-
-        public void Dispose() { }
-
-        private sealed class CapturingLogger(ConcurrentQueue<LogEntry> entries) : ILogger
-        {
-            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-            public bool IsEnabled(LogLevel logLevel) => true;
-
-            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-                => entries.Enqueue(new LogEntry(logLevel, eventId, formatter(state, exception), exception));
-        }
-    }
 
     /// <summary>
     /// Interceptor que hace fallar, una sola vez, el primer comando que inserta alertas procesales.
@@ -96,39 +71,8 @@ public class AlertasWorkerExecutionStrategyTests
         }
     }
 
-    /// <summary>
-    /// Proveedor de servicios igual al de producción: misma cadena de conexión, EnableRetryOnFailure, servicios reales
-    /// de alertas, auditoría y tenant, y sin HttpContext.
-    /// </summary>
-    private static ServiceProvider CrearServiciosProduccion(CapturingLoggerProvider logs, IInterceptor? interceptorAdicional = null)
-    {
-        var configuracion = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["ConnectionStrings:DefaultConnection"] = TestConfiguration.PostgresConnectionString,
-                ["Jwt:Key"] = Convert.ToBase64String(RandomNumberGenerator.GetBytes(48))
-            })
-            .Build();
-
-        var services = new ServiceCollection();
-        services.AddLogging(b => b.SetMinimumLevel(LogLevel.Debug).AddProvider(logs));
-        services.AddHttpContextAccessor();
-        services.AddSingleton<IConfiguration>(configuracion);
-        services.AddInfrastructureServices(configuracion);
-        if (interceptorAdicional != null)
-        {
-            services.ConfigureDbContext<ApplicationDbContext>(o => o.AddInterceptors(interceptorAdicional));
-        }
-
-        return services.BuildServiceProvider();
-    }
-
     private static AlertasBackgroundService CrearWorker(ServiceProvider sp) =>
         new(sp.GetRequiredService<IServiceScopeFactory>(), sp.GetRequiredService<ILogger<AlertasBackgroundService>>());
-
-    private static bool EsErrorDeComandoEF(LogEntry e) => e.EventId.Id == RelationalEventId.CommandError.Id;
-
-    private static bool EsErrorDeSaveChangesEF(LogEntry e) => e.EventId.Id == CoreEventId.SaveChangesFailed.Id;
 
     private static bool EsErrorDelWorker(LogEntry e) => e.Message.Contains("[ALERTAS_WORKER_ERROR]");
 
@@ -156,193 +100,6 @@ public class AlertasWorkerExecutionStrategyTests
 
     private static int OmitidosPorLock(CapturingLoggerProvider logs, Guid tenantId) =>
         logs.Entries.Count(e => e.Message.Contains($"[ADVISORY_LOCK] Tenant {tenantId} ocupado"));
-
-    private static ApplicationDbContext CrearContextoDatos(Guid? tenantId = null)
-    {
-        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
-            .UseNpgsql(TestConfiguration.PostgresConnectionString)
-            .Options;
-        return new ApplicationDbContext(options, tenantId.HasValue ? new TenantFijo(tenantId.Value) : null);
-    }
-
-    private sealed class TenantFijo(Guid tenantId) : ICurrentTenantService
-    {
-        public Guid? TenantId { get; private set; } = tenantId;
-        public string? TenantSlug => "test";
-        public bool IsMultiTenantContext => true;
-        public void SetTenantId(Guid id) => TenantId = id;
-    }
-
-    private sealed class UsuarioFijo(Guid userId, Guid tenantId, string rol) : ICurrentUserService
-    {
-        public Guid? UserId => userId;
-        public Guid? TenantId => tenantId;
-        public string? Email => "abogado@estudio.com";
-        public string? Role => rol;
-        public bool IsAuthenticated => true;
-        public IEnumerable<string> Permissions => [Application.Common.Security.Permissions.AudienciasManage];
-        public bool HasPermission(string permission) => true;
-    }
-
-    private sealed class AuditoriaNula : IAuditService
-    {
-        public Task LogAsync(string entidad, string entidadId, string accion, object? valoresAnteriores = null, object? valoresNuevos = null, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-    }
-
-    private sealed record Escenario(Guid TenantId, Guid AbogadoId, Guid ExpedienteId);
-
-    private static async Task<Escenario> SeedEscenarioAsync(DateTime? expedienteCreadoUtc = null)
-    {
-        var tenantId = Guid.NewGuid();
-        var abogadoId = Guid.NewGuid();
-        var sufijo = Guid.NewGuid().ToString("N")[..8];
-
-        await using (var context = CrearContextoDatos())
-        {
-            context.Tenants.Add(new Tenant
-            {
-                Id = tenantId,
-                Nombre = "Estudio Worker " + sufijo,
-                IdentificadorUrl = "worker-" + sufijo,
-                ZonaHorariaId = "America/Guayaquil",
-                Activo = true,
-                CreatedAt = DateTime.UtcNow
-            });
-            await context.SaveChangesAsync();
-        }
-
-        await using (var context = CrearContextoDatos(tenantId))
-        {
-            var email = $"{Guid.NewGuid():N}_abogado@estudio.com";
-            context.Usuarios.Add(new Usuario
-            {
-                Id = abogadoId,
-                TenantId = tenantId,
-                UserName = email,
-                Email = email,
-                NormalizedEmail = email.ToUpperInvariant(),
-                NormalizedUserName = email.ToUpperInvariant(),
-                NombreCompleto = "Abogado Responsable",
-                Rol = Roles.AbogadoSenior,
-                Activo = true,
-                CreatedAt = DateTime.UtcNow
-            });
-            await context.SaveChangesAsync();
-        }
-
-        var expedienteId = await SeedExpedienteAsync(tenantId, abogadoId, expedienteCreadoUtc ?? DateTime.UtcNow);
-        return new Escenario(tenantId, abogadoId, expedienteId);
-    }
-
-    private static async Task<Guid> SeedExpedienteAsync(Guid tenantId, Guid? abogadoId, DateTime creadoUtc)
-    {
-        await using var context = CrearContextoDatos(tenantId);
-        var cliente = new Cliente
-        {
-            Id = Guid.NewGuid(),
-            TenantId = tenantId,
-            TipoIdentificacion = TipoIdentificacion.Cedula,
-            Identificacion = "17" + Guid.NewGuid().ToString("N")[..8],
-            NombreRazonSocial = "Cliente Worker " + Guid.NewGuid().ToString("N")[..8],
-            Activo = true,
-            CreatedAt = DateTime.UtcNow
-        };
-        context.Clientes.Add(cliente);
-
-        var expediente = new Expediente
-        {
-            Id = Guid.NewGuid(),
-            TenantId = tenantId,
-            ClienteId = cliente.Id,
-            NumeroExpediente = "EXP-" + Guid.NewGuid().ToString("N")[..8],
-            Titulo = "Caso Worker " + Guid.NewGuid().ToString("N")[..8],
-            Materia = "Civil",
-            AbogadoResponsableId = abogadoId,
-            Estado = EstadoExpediente.Abierto,
-            CreatedAt = creadoUtc
-        };
-        context.Expedientes.Add(expediente);
-        await context.SaveChangesAsync();
-        return expediente.Id;
-    }
-
-    private static async Task<Guid> SeedAudienciaAsync(Escenario e, DateTime fechaHora, EstadoAudiencia estado = EstadoAudiencia.Programada)
-    {
-        await using var context = CrearContextoDatos(e.TenantId);
-        var audiencia = new Audiencia
-        {
-            Id = Guid.NewGuid(),
-            TenantId = e.TenantId,
-            ExpedienteId = e.ExpedienteId,
-            FechaHora = fechaHora,
-            SalaOVirtual = "Sala Worker",
-            TipoAudiencia = TipoAudiencia.Juicio,
-            Estado = estado,
-            CreatedAt = DateTime.UtcNow
-        };
-        context.Audiencias.Add(audiencia);
-        await context.SaveChangesAsync();
-        return audiencia.Id;
-    }
-
-    private static async Task<Guid> SeedTareaAsync(Escenario e, Guid? asignadoA, DateTime vencimiento, EstadoTarea estado = EstadoTarea.Pendiente)
-    {
-        await using var context = CrearContextoDatos(e.TenantId);
-        var tarea = new Tarea
-        {
-            Id = Guid.NewGuid(),
-            TenantId = e.TenantId,
-            ExpedienteId = e.ExpedienteId,
-            AsignadoAUsuarioId = asignadoA,
-            Titulo = "Tarea Worker " + Guid.NewGuid().ToString("N")[..6],
-            FechaVencimiento = vencimiento,
-            Prioridad = Prioridad.Alta,
-            Estado = estado,
-            CreatedAt = DateTime.UtcNow
-        };
-        context.Tareas.Add(tarea);
-        await context.SaveChangesAsync();
-        return tarea.Id;
-    }
-
-    private static async Task<Guid> SeedUsuarioAsync(Guid tenantId, string rol)
-    {
-        await using var context = CrearContextoDatos(tenantId);
-        var email = $"{Guid.NewGuid():N}_usuario@estudio.com";
-        var usuario = new Usuario
-        {
-            Id = Guid.NewGuid(),
-            TenantId = tenantId,
-            UserName = email,
-            Email = email,
-            NormalizedEmail = email.ToUpperInvariant(),
-            NormalizedUserName = email.ToUpperInvariant(),
-            NombreCompleto = "Usuario " + rol,
-            Rol = rol,
-            Activo = true,
-            CreatedAt = DateTime.UtcNow
-        };
-        context.Usuarios.Add(usuario);
-        await context.SaveChangesAsync();
-        return usuario.Id;
-    }
-
-    private static async Task<List<AlertaProcesal>> AlertasDelTenantAsync(Guid tenantId)
-    {
-        await using var context = CrearContextoDatos(tenantId);
-        return await context.AlertasProcesales.AsNoTracking().Where(a => a.TenantId == tenantId).ToListAsync();
-    }
-
-    private static void AssertSinDuplicados(IEnumerable<AlertaProcesal> alertas)
-    {
-        var duplicadas = alertas
-            .Where(a => a.EstadoResolucion != EstadoAlertaResolucion.InvalidaPorReprogramacion)
-            .GroupBy(a => (a.TipoOrigen, a.OrigenId, a.ReglaAlerta, a.UsuarioId, a.FechaObjetivoUtc))
-            .Where(g => g.Count() > 1)
-            .ToList();
-        Assert.True(duplicadas.Count == 0, $"Hay {duplicadas.Count} alertas duplicadas.");
-    }
 
     /// <summary>Alertas de audiencia a menos de 24 h: 7d, 48h y 24h, cada una para el responsable y para supervisión.</summary>
     private static readonly ReglaAlertaCodigo[] ReglasAudiencia24h =
@@ -584,10 +341,12 @@ public class AlertasWorkerExecutionStrategyTests
         Assert.All(alertasBDespues, x => Assert.Equal(versionesB[x.Id], x.Version));
 
         // Ninguna alerta de las audiencias de A o B quedó registrada en otro tenant.
+        // Vista global (solo en la prueba): sin filtro de tenant, acotada por OrigenId.
         await using var global = CrearContextoDatos();
-        var porOrigen = await global.AlertasProcesales.AsNoTracking()
+        var porOrigen = await global.AlertasProcesales.IgnoreQueryFilters().AsNoTracking()
             .Where(x => x.OrigenId == audienciaA || x.OrigenId == audienciaB)
             .ToListAsync();
+        Assert.Equal(12, porOrigen.Count);
         Assert.All(porOrigen, x => Assert.Equal(x.OrigenId == audienciaA ? a.TenantId : b.TenantId, x.TenantId));
     }
 
