@@ -79,6 +79,29 @@ public class ProcesoJudicialPostgreSqlIntegrationTests
             new VincularProcesoValidator());
     }
 
+    /// <summary>
+    /// Espera, con una conexión independiente, a que alguna sesión de PostgreSQL esté bloqueada por la sesión
+    /// <paramref name="pidBloqueante"/>. Falla si no ocurre dentro del plazo.
+    /// </summary>
+    private static async Task EsperarSesionBloqueadaPorAsync(int pidBloqueante, TimeSpan plazo)
+    {
+        await using var conexion = new Npgsql.NpgsqlConnection(PostgresConnectionString);
+        await conexion.OpenAsync();
+        await using var comando = new Npgsql.NpgsqlCommand(
+            "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))", conexion);
+        comando.Parameters.AddWithValue(pidBloqueante);
+
+        var limite = DateTime.UtcNow + plazo;
+        while ((long)(await comando.ExecuteScalarAsync())! == 0)
+        {
+            if (DateTime.UtcNow > limite)
+            {
+                throw new TimeoutException($"Ninguna sesión quedó bloqueada por la sesión {pidBloqueante} en {plazo.TotalSeconds} s.");
+            }
+            await Task.Delay(10);
+        }
+    }
+
     [Fact]
     public async Task ReemplazoConcurrenteProcesoPrincipal_DosPeticionesSimultaneas_Una200Otra409Conflict()
     {
@@ -185,7 +208,14 @@ public class ProcesoJudicialPostgreSqlIntegrationTests
                             task1Started.TrySetResult(true);
                             // Esperar que la tarea 2 entre a ejecutar concurrentemente y bloquee en el lock
                             await task2Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                            await Task.Delay(100); // margen para que la consulta UPDATE de task 2 bloquee en PostgreSQL
+
+                            // No confirmar hasta que PostgreSQL muestre a la tarea 2 bloqueada por esta transacción.
+                            // Un margen fijo de tiempo no basta: con la suite en paralelo la tarea 2 puede tardar
+                            // más en llegar a su UPDATE y, si esta transacción ya confirmó, no hay concurrencia real.
+                            var pidTarea1 = await context1.Database
+                                .SqlQueryRaw<int>("SELECT pg_backend_pid() AS \"Value\"")
+                                .SingleAsync();
+                            await EsperarSesionBloqueadaPorAsync(pidTarea1, TimeSpan.FromSeconds(10));
                         });
                     results.Add((true, null));
                 }

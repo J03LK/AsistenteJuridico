@@ -4,6 +4,11 @@ using AsistenteJuridico.Application.Common.Interfaces;
 using AsistenteJuridico.Domain.Entities;
 using AsistenteJuridico.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 
 namespace AsistenteJuridico.Infrastructure.Services;
 
@@ -18,6 +23,7 @@ public class AuditService : IAuditService
     private readonly ICurrentUserService _currentUserService;
     private readonly ICurrentTenantService _currentTenantService;
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly ILogger<AuditService> _logger;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -30,12 +36,14 @@ public class AuditService : IAuditService
         ApplicationDbContext context,
         ICurrentUserService currentUserService,
         ICurrentTenantService currentTenantService,
-        IHttpContextAccessor httpContextAccessor)
+        IHttpContextAccessor httpContextAccessor,
+        ILogger<AuditService>? logger = null)
     {
         _context = context;
         _currentUserService = currentUserService;
         _currentTenantService = currentTenantService;
         _httpContextAccessor = httpContextAccessor;
+        _logger = logger ?? NullLogger<AuditService>.Instance;
     }
 
     private static readonly HashSet<string> SensitiveKeywords = new(StringComparer.OrdinalIgnoreCase)
@@ -46,6 +54,32 @@ public class AuditService : IAuditService
         "key", "privatekey", "clientsecret"
     };
 
+    /// <summary>
+    /// Agrega la auditoría a la unidad de trabajo actual sin guardarla: el SaveChanges del servicio que controla la
+    /// transacción la persiste junto con la operación, de modo que ambas se confirman o se revierten a la vez.
+    /// </summary>
+    public Task LogInTransactionAsync(
+        string entidad,
+        string entidadId,
+        string accion,
+        object? valoresAnteriores = null,
+        object? valoresNuevos = null,
+        CancellationToken cancellationToken = default)
+    {
+        var auditoria = CrearAuditoria(entidad, entidadId, accion, valoresAnteriores, valoresNuevos);
+        if (auditoria != null)
+        {
+            _context.HistorialAuditorias.Add(auditoria);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Guarda la auditoría de una operación ya confirmada en un contexto propio, para no guardar ni dejar pendiente
+    /// nada en el contexto compartido. Si falla, la operación no se revierte y queda constancia en el log técnico,
+    /// sin los valores auditados.
+    /// </summary>
     public async Task LogAsync(
         string entidad,
         string entidadId,
@@ -54,10 +88,39 @@ public class AuditService : IAuditService
         object? valoresNuevos = null,
         CancellationToken cancellationToken = default)
     {
+        var auditoria = CrearAuditoria(entidad, entidadId, accion, valoresAnteriores, valoresNuevos);
+        if (auditoria == null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Mismas opciones que el contexto compartido (conexión, reintentos e interceptores).
+            var opciones = (DbContextOptions<ApplicationDbContext>)_context.GetService<IDbContextOptions>();
+            await using var contextoAuditoria = new ApplicationDbContext(opciones, _currentTenantService);
+            contextoAuditoria.HistorialAuditorias.Add(auditoria);
+            await contextoAuditoria.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                "[AUDITORIA_NO_REGISTRADA] No se pudo guardar la auditoría {Accion} de {Entidad} {EntidadId} (tenant {TenantId}). Error: {TipoError}, SQLSTATE: {SqlState}.",
+                accion, entidad, entidadId, auditoria.TenantId, DescribirTipoError(ex), ObtenerSqlState(ex) ?? "n/a");
+        }
+    }
+
+    private HistorialAuditoria? CrearAuditoria(
+        string entidad,
+        string entidadId,
+        string accion,
+        object? valoresAnteriores,
+        object? valoresNuevos)
+    {
         var tenantId = _currentTenantService.TenantId ?? _currentUserService.TenantId;
         if (!tenantId.HasValue)
         {
-            return;
+            return null;
         }
 
         var ip = _httpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString();
@@ -65,7 +128,7 @@ public class AuditService : IAuditService
         var sanitizedAnteriores = SanitizeAuditData(valoresAnteriores);
         var sanitizedNuevos = SanitizeAuditData(valoresNuevos);
 
-        var auditoria = new HistorialAuditoria
+        return new HistorialAuditoria
         {
             Id = Guid.NewGuid(),
             TenantId = tenantId.Value,
@@ -79,16 +142,31 @@ public class AuditService : IAuditService
             ValoresAnterioresJson = sanitizedAnteriores != null ? JsonSerializer.Serialize(sanitizedAnteriores, JsonOptions) : null,
             ValoresNuevosJson = sanitizedNuevos != null ? JsonSerializer.Serialize(sanitizedNuevos, JsonOptions) : null
         };
+    }
 
-        _context.HistorialAuditorias.Add(auditoria);
-        try
+    /// <summary>Tipo de la excepción y de su causa más interna; nunca sus mensajes, que pueden incluir datos.</summary>
+    private static string DescribirTipoError(Exception ex)
+    {
+        var interna = ex;
+        while (interna.InnerException != null)
         {
-            await _context.SaveChangesAsync(cancellationToken);
+            interna = interna.InnerException;
         }
-        catch
+
+        return interna == ex ? ex.GetType().Name : $"{ex.GetType().Name} -> {interna.GetType().Name}";
+    }
+
+    private static string? ObtenerSqlState(Exception ex)
+    {
+        for (var actual = ex; actual != null; actual = actual.InnerException)
         {
-            // La auditoría no debe bloquear el flujo de la aplicación si ocurre un error transitorio
+            if (actual is PostgresException pg)
+            {
+                return pg.SqlState;
+            }
         }
+
+        return null;
     }
 
     private static object? SanitizeAuditData(object? obj)

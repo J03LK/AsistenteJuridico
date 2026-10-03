@@ -475,7 +475,9 @@ public class ExpedienteService : IExpedienteService
                     tarea.UpdatedBy = _currentUserService.Email;
                 }
 
-                await _auditService.LogAsync("Expediente", expediente.Id.ToString(), "FORCE_CLOSE",
+                // La cancelación de tareas, esta auditoría y el cierre (con su control xmin) se guardan en el mismo
+                // SaveChanges: una sola transacción que se confirma o se revierte entera.
+                await _auditService.LogInTransactionAsync("Expediente", expediente.Id.ToString(), "FORCE_CLOSE",
                     new { tareasCanceladas = tareasActivas.Select(t => t.Id).ToList() },
                     new { motivo = dto.MotivoCierreForzado?.Trim() },
                     cancellationToken);

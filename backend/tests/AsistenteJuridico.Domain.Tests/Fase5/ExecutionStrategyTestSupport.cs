@@ -162,6 +162,42 @@ internal static class ExecutionStrategyTestSupport
         }
     }
 
+    /// <summary>
+    /// Hace que PostgreSQL rechace, una sola vez, el primer comando cuyo SQL contiene el fragmento indicado: lo
+    /// reemplaza por un RAISE EXCEPTION con el SQLSTATE dado, de modo que el servidor no aplica nada de ese comando.
+    /// </summary>
+    internal sealed class ErrorServidorInterceptor(string fragmentoSql, string sqlState) : DbCommandInterceptor
+    {
+        private int _armado = 1;
+        public int FallosProvocados;
+        public int Ejecuciones;
+
+        private void Reescribir(DbCommand command)
+        {
+            if (!command.CommandText.Contains(fragmentoSql, StringComparison.OrdinalIgnoreCase)) return;
+            Interlocked.Increment(ref Ejecuciones);
+            if (Interlocked.Exchange(ref _armado, 0) != 1) return;
+
+            Interlocked.Increment(ref FallosProvocados);
+            command.Parameters.Clear();
+            command.CommandText = $"DO $$ BEGIN RAISE EXCEPTION 'Fallo de servidor simulado' USING ERRCODE = '{sqlState}'; END $$;";
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            Reescribir(command);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            Reescribir(command);
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
     /// <summary>Cuenta las transacciones iniciadas y confirmadas: cada intento de la estrategia abre una nueva.</summary>
     internal sealed class ContadorTransaccionesInterceptor : DbTransactionInterceptor
     {

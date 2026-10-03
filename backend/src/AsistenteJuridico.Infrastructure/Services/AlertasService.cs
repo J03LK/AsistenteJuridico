@@ -721,7 +721,7 @@ public class AlertasService : IAlertasService
                 a.ResueltaUtc = now;
                 a.MotivoResolucion = motivo;
 
-                await _auditService.LogAsync(
+                await _auditService.LogInTransactionAsync(
                     "AlertaProcesal",
                     a.Id.ToString(),
                     "ALERTA_RESOLUCION_AUTOMATICA",

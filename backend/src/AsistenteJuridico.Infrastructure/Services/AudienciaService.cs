@@ -442,7 +442,7 @@ public class AudienciaService : IAudienciaService
                     a.ResueltaUtc = now;
                     a.MotivoResolucion = $"Audiencia en estado {dto.NuevoEstado}";
 
-                    await _auditService.LogAsync(
+                    await _auditService.LogInTransactionAsync(
                         "AlertaProcesal",
                         a.Id.ToString(),
                         "ALERTA_RESOLUCION_AUTOMATICA",

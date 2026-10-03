@@ -457,7 +457,7 @@ public class TareaService : ITareaService
                     a.ResueltaUtc = now;
                     a.MotivoResolucion = $"Tarea en estado {dto.NuevoEstado}";
 
-                    await _auditService.LogAsync(
+                    await _auditService.LogInTransactionAsync(
                         "AlertaProcesal",
                         a.Id.ToString(),
                         "ALERTA_RESOLUCION_AUTOMATICA",
