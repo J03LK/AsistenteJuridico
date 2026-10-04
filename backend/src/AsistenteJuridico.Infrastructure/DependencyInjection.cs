@@ -245,6 +245,11 @@ public static class DependencyInjection
             .ValidateOnStart();
         services.AddHostedService<AsistenteJuridico.Infrastructure.BackgroundServices.ProcesamientoIaRecoveryBackgroundService>();
 
+        // ──────────────────────────────────────────────────────────
+        // FASE 8.3: PROVEEDOR DE EMBEDDINGS (solo infraestructura; sin consumidores hasta la 8.4)
+        // ──────────────────────────────────────────────────────────
+        AsistenteJuridico.Infrastructure.Services.AI.EmbeddingServiceCollectionExtensions.AddEmbeddingProvider(services, configuration);
+
         return services;
     }
 }
