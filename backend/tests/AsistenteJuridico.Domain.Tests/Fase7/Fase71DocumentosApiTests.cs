@@ -374,22 +374,27 @@ public class Fase71DocumentosApiTests : IClassFixture<WebApplicationFactory<Prog
         Assert.Empty(Errores(junior.Body));
     }
 
+    /// <summary>
+    /// Adenda A1 del contrato de la Fase 7 (§28): supersede a EndpointDeIA_NoEmiteCodigosDocumentales_YHeredaElEndurecimiento
+    /// (regla D8 de la Fase 7.1: la IA respondía sin código). Ahora la IA expone el código documental del catálogo cuando
+    /// la causa es documental, con el mismo significado que en la API de documentos.
+    /// </summary>
     [Fact]
-    public async Task EndpointDeIA_NoEmiteCodigosDocumentales_YHeredaElEndurecimiento()
+    public async Task EndpointDeIA_EmiteCodigosDocumentalesDelCatalogo_YHeredaElEndurecimiento()
     {
         var senior = Token(_seniorId, Roles.AbogadoSenior);
 
-        // Documento inexistente: 404 de la IA sin código, igual que en la Fase 6
+        // Documento inexistente: 404 de la IA con DOCUMENT_NOT_FOUND (antes, sin código)
         var inexistente = await SendAsync(HttpMethod.Post, "/api/v1/ai/resumir-documento", senior,
             new StringContent(JsonSerializer.Serialize(new { documentoId = Guid.NewGuid() }), Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.NotFound, inexistente.Status);
-        Assert.Empty(Errores(inexistente.Body));
+        Assert.Equal(["DOCUMENT_NOT_FOUND"], Errores(inexistente.Body));
 
-        // X3: documento de un expediente eliminado ahora es 404 también para la IA, sin cambiar su contrato
+        // X3: documento de un expediente eliminado es 404 también para la IA, con el mismo código documental
         var (_, documentoId) = await SeedExpedienteConDocumentoAsync(expedienteEliminado: true);
         var eliminado = await SendAsync(HttpMethod.Post, "/api/v1/ai/resumir-documento", senior,
             new StringContent(JsonSerializer.Serialize(new { documentoId }), Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.NotFound, eliminado.Status);
-        Assert.Empty(Errores(eliminado.Body));
+        Assert.Equal(["DOCUMENT_NOT_FOUND"], Errores(eliminado.Body));
     }
 }

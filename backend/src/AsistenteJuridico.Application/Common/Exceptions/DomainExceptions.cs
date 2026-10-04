@@ -16,7 +16,9 @@ public abstract class DomainException : Exception
 }
 
 /// <summary>
-/// Códigos de error del módulo de documentos (contrato Fase 7). Solo los emite la capa de documentos.
+/// Códigos de error del módulo de documentos (contrato Fase 7). La capa de documentos es su autoridad semántica.
+/// Adenda A1 (FASE_7_CONTRATO.md §28): los endpoints de IA pueden exponerlos cuando la causa del error es documental,
+/// con el mismo significado; nunca códigos DOCUMENT_* fuera del catálogo contractual.
 /// </summary>
 public static class DocumentoErrorCodes
 {
@@ -144,6 +146,14 @@ public class DocumentContextExceededException : BusinessRuleException
 
     public DocumentContextExceededException(int length, int limit = 30000)
         : base($"DOCUMENT_EXCEEDS_CONTEXT_LIMIT: El documento contiene {length} caracteres, superando el límite máximo permitido de {limit} caracteres.") { }
+
+    /// <summary>
+    /// Fase 6.X: la extracción se detiene al superar el límite, así que la longitud total no se conoce.
+    /// </summary>
+    public static DocumentContextExceededException SuperaLimite(int limit) => new(limit, longitudDesconocida: true);
+
+    private DocumentContextExceededException(int limit, bool longitudDesconocida)
+        : base($"DOCUMENT_EXCEEDS_CONTEXT_LIMIT: El documento supera el límite máximo permitido de {limit} caracteres.") { }
 }
 
 /// <summary>

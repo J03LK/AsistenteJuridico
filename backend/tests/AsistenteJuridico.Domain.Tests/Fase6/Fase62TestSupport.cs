@@ -374,6 +374,13 @@ internal sealed class AiApiFactory : WebApplicationFactory<Program>
         };
         db.Expedientes.Add(expediente);
 
+        // Fase 6.X (DA-11): archivo real en el almacenamiento real del host. Antes la ruta no existía y la IA recibía un
+        // texto de respaldo inventado, que el contrato 6.X prohíbe.
+        var contenido = Encoding.UTF8.GetBytes("Contrato de prestación de servicios entre las partes. Cláusula primera: objeto.");
+        var almacenado = scope.ServiceProvider.GetRequiredService<IFileStorageService>()
+            .SaveDocumentoAsync(TenantId, expediente.Id, new MemoryStream(contenido), "contrato.txt", "text/plain", contenido.Length)
+            .GetAwaiter().GetResult();
+
         var documento = new Documento
         {
             Id = Guid.NewGuid(),
@@ -381,8 +388,11 @@ internal sealed class AiApiFactory : WebApplicationFactory<Program>
             ExpedienteId = expediente.Id,
             Titulo = "Contrato de Prueba.pdf",
             TipoDocumento = "Contrato",
-            RutaAlmacenamiento = "tenant/inexistente.pdf",
-            ContentType = "application/pdf",
+            NombreArchivoOriginal = almacenado.NombreArchivoOriginal,
+            RutaAlmacenamiento = almacenado.RelativePath,
+            ContentType = almacenado.ContentType,
+            TamanioBytes = almacenado.SizeBytes,
+            HashSha256 = almacenado.Sha256Hash,
             EstadoIa = EstadoProcesamientoIa.Pendiente,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow

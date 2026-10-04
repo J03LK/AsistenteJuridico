@@ -69,9 +69,10 @@ public class GlobalExceptionMiddleware
                 StatusCodes.Status409Conflict,
                 ApiResponse<object>.Fail("Conflicto de unicidad: Ya existe un registro con los mismos datos clave o restricción única violada.")
             ),
+            // Fase 6.X (DA-7): aditivo; sin ErrorCode la respuesta es la de siempre (errors: []).
             BusinessRuleException bre => (
                 StatusCodes.Status422UnprocessableEntity,
-                ApiResponse<object>.Fail(bre.Message)
+                ApiResponse<object>.Fail(bre.Message, ErroresConCodigo(bre))
             ),
             TenantTimeZoneInvalidException itze => (
                 StatusCodes.Status422UnprocessableEntity,

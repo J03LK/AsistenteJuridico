@@ -224,6 +224,25 @@ public static class DependencyInjection
 
         services.AddScoped<AsistenteJuridico.Application.Features.AI.Interfaces.IAIService, AIService>();
 
+        // ──────────────────────────────────────────────────────────
+        // FASE 6.X: EXTRACCIÓN DE TEXTO (H10) Y RECUPERACIÓN DE PROCESANDO (X1)
+        // ──────────────────────────────────────────────────────────
+        services.Configure<AsistenteJuridico.Infrastructure.Services.AI.DocumentTextExtractionOptions>(
+            configuration.GetSection(AsistenteJuridico.Infrastructure.Services.AI.DocumentTextExtractionOptions.SectionName));
+        services.AddScoped<AsistenteJuridico.Application.Common.Interfaces.AI.IDocumentTextExtractor,
+            AsistenteJuridico.Infrastructure.Services.AI.DocumentTextExtractor>();
+
+        // DA-3: el lease debe superar la suma de los timeouts explícitos del proveedor y de la extracción; si no,
+        // la aplicación no arranca.
+        services.AddOptions<AsistenteJuridico.Infrastructure.BackgroundServices.ProcesamientoIaRecoveryOptions>()
+            .Bind(configuration.GetSection(AsistenteJuridico.Infrastructure.BackgroundServices.ProcesamientoIaRecoveryOptions.SectionName))
+            .Validate<IOptions<AsistenteJuridico.Infrastructure.Services.AI.OpenAIOptions>, IOptions<AsistenteJuridico.Infrastructure.Services.AI.DocumentTextExtractionOptions>>(
+                (recuperacion, proveedor, extraccion) => AsistenteJuridico.Infrastructure.BackgroundServices.ProcesamientoIaRecoveryOptions.LeaseEsValido(
+                    recuperacion.LeaseSeconds, proveedor.Value.TimeoutSeconds, extraccion.Value.TimeoutSeconds),
+                "AI:ProcessingRecovery:LeaseSeconds debe ser mayor que AI:OpenAICompatible:TimeoutSeconds + AI:Extraction:TimeoutSeconds.")
+            .ValidateOnStart();
+        services.AddHostedService<AsistenteJuridico.Infrastructure.BackgroundServices.ProcesamientoIaRecoveryBackgroundService>();
+
         return services;
     }
 }

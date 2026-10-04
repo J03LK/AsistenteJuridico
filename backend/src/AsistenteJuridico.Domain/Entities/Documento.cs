@@ -33,6 +33,11 @@ public class Documento : AuditableEntity, IMultiTenant, ISoftDeletable
     // Soporte para IA / RAG
     public EstadoProcesamientoIa EstadoIa { get; set; } = EstadoProcesamientoIa.Pendiente;
     public string? MetadatosJson { get; set; }
+
+    // Fase 6.X (X1): instante en que el documento entró en Procesando. Solo tiene valor mientras
+    // EstadoIa = Procesando; lo usa la recuperación por lease. Toda transición nueva a Procesando lo fija.
+    public DateTime? IaProcesandoDesde { get; set; }
+
     public uint Version { get; set; }
 
     // Soft delete

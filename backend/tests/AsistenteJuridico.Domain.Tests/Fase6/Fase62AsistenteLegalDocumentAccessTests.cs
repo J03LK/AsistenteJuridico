@@ -63,7 +63,7 @@ public class Fase62AsistenteLegalDocumentAccessTests
             Titulo = "Escrito de prueba",
             TipoDocumento = "Escrito",
             RutaAlmacenamiento = "tenant/escrito.pdf",
-            ContentType = "application/pdf",
+            ContentType = "text/plain; charset=utf-8", // Fase 6.X (DA-11): el doble de almacenamiento devuelve texto
             EstadoIa = EstadoProcesamientoIa.Pendiente
         };
 

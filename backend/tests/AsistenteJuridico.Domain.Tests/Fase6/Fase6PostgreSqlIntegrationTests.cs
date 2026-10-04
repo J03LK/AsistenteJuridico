@@ -152,7 +152,7 @@ public class Fase6PostgreSqlIntegrationTests
             Titulo = "Contrato Mercantil.pdf",
             TipoDocumento = "Contrato",
             RutaAlmacenamiento = "tenant/contrato.pdf",
-            ContentType = "application/pdf",
+            ContentType = "text/plain; charset=utf-8", // Fase 6.X (DA-11): el doble de almacenamiento devuelve texto
             EstadoIa = EstadoProcesamientoIa.Pendiente,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow

@@ -64,6 +64,10 @@ public class DocumentoConfiguration : IEntityTypeConfiguration<Documento>
         builder.Property(d => d.DeletedAt)
             .HasColumnType("timestamp with time zone");
 
+        // Fase 6.X (X1): inicio del lease de Procesando.
+        builder.Property(d => d.IaProcesandoDesde)
+            .HasColumnType("timestamp with time zone");
+
         // Relación con Tenant
         builder.HasOne(d => d.Tenant)
             .WithMany()

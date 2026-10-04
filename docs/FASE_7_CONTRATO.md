@@ -2,6 +2,8 @@
 
 Este documento recoge el estado **implementado** del módulo de documentos al cierre de la Fase 7 (subfases 7.1 a 7.5). Consolida los contratos aprobados de cada subfase (D1–D8, X1–X4, D73-*, D74-*, D75-*) y describe solo lo que existe en el código. Cuando este documento y un contrato de subfase difieren, prevalece este documento, porque refleja el código final.
 
+**Adendas:** A1 (2026-10-03, resolución del conflicto con la Fase 6.X): los códigos `DOCUMENT_*` pueden exponerse también desde endpoints de IA cuando la causa es documental. Ver §28. Supersede parcialmente la decisión D8 de la Fase 7.1.
+
 ## 1. Objetivo
 
 Convertir el módulo de documentos en un componente seguro y coherente:
@@ -322,6 +324,8 @@ Migración `20261003223301_Fase74DocumentosIntegridad`:
 
 ## 19. Errores
 
+> **Adenda A1 (§28):** los códigos de esta sección pueden exponerse también desde endpoints de IA cuando la causa del error es documental. Sus nombres y significados no cambian.
+
 **Formato de la respuesta:**
 - Envelope `ApiResponse` con `success: false`, `message` y `errors`.
 - 404, 403, 409, 413 y 415 llevan `errors: [código]`.
@@ -480,3 +484,32 @@ Son obligatorias **antes de la Fase 8** (D75-6) y **no** se corrigieron en la Fa
   - La Fase 8 (indexación/RAG) debe distinguir entre un archivo inexistente, una ruta insegura y un contenido ilegible antes de depender de esa lectura.
 - **`DOCUMENT_HASH_MISMATCH`:** está reservado para la verificación o reconciliación futura con `HashSha256`.
 - **Prerrequisitos:** D-2 y X1 (§26).
+
+## 28. Adenda A1 — Códigos `DOCUMENT_*` en endpoints de IA
+
+**Fecha:** 2026-10-03. **Origen:** conflicto contractual detectado al implementar la Fase 6.X (remediación IA, `docs/FASE_6X_CONTRATO.md`). **Decisión:** opción (A), aprobada por el responsable del proyecto. **Estado:** vigente; prevalece sobre la regla anterior en lo que aquí se indica.
+
+### Regla anterior (Fase 7.1, decisión D8) — se conserva como registro histórico
+
+> "Los códigos `DOCUMENT_*` los lanza solo la capa de documentos. `DocumentoService` traduce el `NotFoundException`/`ForbiddenException` del servicio de acceso a estos códigos; `IExpedienteAccessService` y los endpoints de IA siguen igual."
+
+Con esa regla, los endpoints de IA respondían a los fallos documentales sin código (por ejemplo, 404 de `resumir-documento` con `errors: []`). La prueba `EndpointDeIA_NoEmiteCodigosDocumentales_YHeredaElEndurecimiento` (`Fase71DocumentosApiTests`) verificaba ese comportamiento.
+
+### Motivo del cambio
+
+La Fase 6.X introduce operaciones de IA que trabajan directamente sobre documentos: autorización documental (D-2), validación de `DocumentoIds`, extracción de texto real y recuperación de `Procesando`. Cuando una de esas operaciones falla por una causa documental (documento inexistente, acceso documental denegado, archivo físico ausente, documento en procesamiento…), el cliente necesita el mismo código semántico que recibe de la API de documentos.
+
+### Regla definitiva
+
+1. Los códigos `DOCUMENT_*` son **códigos semánticos del dominio documental**. La capa de documentos (`DocumentoErrorCodes`, este contrato y `docs/FASE_6X_CONTRATO.md` para los códigos documentales que define) **sigue siendo la autoridad semántica** de esos códigos.
+2. Los endpoints de IA **pueden exponer** códigos `DOCUMENT_*` **solo cuando la causa del error es documental**.
+3. Los flujos de IA **no pueden inventar** códigos `DOCUMENT_*` fuera del catálogo contractual. El catálogo es el de §19 de este contrato más los códigos documentales que define el contrato aprobado de la Fase 6.X: `DOCUMENT_DOCUMENTS_INVALID`, `DOCUMENT_TEXT_EMPTY`, `DOCUMENT_TEXT_UNSUPPORTED`, `DOCUMENT_TEXT_INVALID` y `DOCUMENT_TEXT_EXTRACTION_FAILED` (y `DOCUMENT_EXCEEDS_CONTEXT_LIMIT`, existente desde la Fase 6).
+4. **No cambian** los nombres, significados, códigos HTTP ni contratos de los códigos existentes. Un código `DOCUMENT_*` expuesto por la IA significa exactamente lo mismo que en la API de documentos.
+5. Los errores no documentales de la IA conservan sus propios códigos (`AI_PROVIDER_ERROR`, `AI_PROVIDER_TIMEOUT`, `AI_CONTEXT_WINDOW_EXCEEDED`, `TOO_MANY_REQUESTS`…).
+6. El 404 de un **expediente** inexistente o eliminado sigue sin código, igual que en el listado de la Fase 7.3: no es un fallo de documento.
+
+### Alcance de la supersesión
+
+- Queda supersedida **solo** la parte de D8 que reservaba la *emisión* de los códigos `DOCUMENT_*` a la capa de documentos y mantenía sin cambios los endpoints de IA. El resto de D8 (ErrorCode aditivo; respuestas sin código idénticas a las de las Fases 0–6) sigue vigente.
+- La prueba `EndpointDeIA_NoEmiteCodigosDocumentales_YHeredaElEndurecimiento` queda **supersedida** y se sustituye por `EndpointDeIA_EmiteCodigosDocumentalesDelCatalogo_YHeredaElEndurecimiento`: verifica `DOCUMENT_NOT_FOUND` en la IA para un documento inexistente y para un documento de un expediente eliminado (X3).
+- No cambian PBAC, aislamiento multi-tenant ni reglas de seguridad.
