@@ -132,12 +132,14 @@ public class Fase82RegresionYArquitecturaTests : IDisposable
             }
         }
 
-        // ExtractSegmentsAsync solo aparece en su contrato y en su implementación: no hay llamadores en producción.
+        // ExtractSegmentsAsync solo aparece en su contrato, en su implementación y, desde la 8.4, en su único llamador
+        // de producción: el servicio de indexación semántica.
         var conSegmentos = archivos.Where(a => a.Value.Contains("ExtractSegmentsAsync", StringComparison.Ordinal)).Select(a => a.Key).Order().ToArray();
         Assert.Equal(new[]
         {
             "AsistenteJuridico.Application/Common/Interfaces/AI/IDocumentTextExtractor.cs",
-            "AsistenteJuridico.Infrastructure/Services/AI/DocumentTextExtractor.cs"
+            "AsistenteJuridico.Infrastructure/Services/AI/DocumentTextExtractor.cs",
+            "AsistenteJuridico.Infrastructure/Services/IndexacionSemanticaService.cs"
         }, conSegmentos);
 
         // Los componentes puros no tocan base de datos, archivos ni red.

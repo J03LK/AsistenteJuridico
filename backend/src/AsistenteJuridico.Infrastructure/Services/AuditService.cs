@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using AsistenteJuridico.Application.Common.Interfaces;
 using AsistenteJuridico.Domain.Entities;
 using AsistenteJuridico.Infrastructure.Persistence;
@@ -29,7 +30,8 @@ public class AuditService : IAuditService
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = false
+        WriteIndented = false,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver { Modifiers = { ConservarContadoresDeTokensNulos } }
     };
 
     public AuditService(
@@ -192,7 +194,7 @@ public class AuditService : IAuditService
                 var dict = new Dictionary<string, object?>();
                 foreach (var prop in element.EnumerateObject())
                 {
-                    if (IsSensitiveKey(prop.Name))
+                    if (IsSensitiveKey(prop.Name) && !EsContadorDeTokensPermitido(prop))
                     {
                         dict[prop.Name] = "[REDACTED]";
                     }
@@ -233,6 +235,40 @@ public class AuditService : IAuditService
                 return null;
         }
     }
+
+    /// <summary>
+    /// Fase 8.4 (FASE_8_4_CONTRATO.md §22.3, §27): excepción mínima al saneamiento. Solo las dos claves exactas de los
+    /// contadores de la indexación, y solo si su valor es un número o null; con cualquier otro valor (p. ej. una cadena)
+    /// se redactan como el resto de claves que contienen "token".
+    /// </summary>
+    private static readonly HashSet<string> ContadoresDeTokensPermitidos = new(StringComparer.Ordinal)
+    {
+        "tokensTotales", "tokensInformados"
+    };
+
+    /// <summary>
+    /// Los null se siguen omitiendo en toda la auditoría salvo en esas dos claves: "no informado" (null) debe
+    /// distinguirse de un consumo informado de 0 (§22.3).
+    /// </summary>
+    private static void ConservarContadoresDeTokensNulos(JsonTypeInfo info)
+    {
+        if (info.Kind != JsonTypeInfoKind.Object)
+        {
+            return;
+        }
+
+        foreach (var propiedad in info.Properties)
+        {
+            if (ContadoresDeTokensPermitidos.Contains(propiedad.Name))
+            {
+                propiedad.ShouldSerialize = static (_, _) => true;
+            }
+        }
+    }
+
+    private static bool EsContadorDeTokensPermitido(JsonProperty prop) =>
+        ContadoresDeTokensPermitidos.Contains(prop.Name)
+        && prop.Value.ValueKind is JsonValueKind.Number or JsonValueKind.Null;
 
     private static bool IsSensitiveKey(string name)
     {

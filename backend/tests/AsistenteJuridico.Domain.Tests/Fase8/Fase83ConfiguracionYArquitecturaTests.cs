@@ -378,9 +378,12 @@ public class Fase83ConfiguracionYArquitecturaTests
         const string opciones = "AsistenteJuridico.Infrastructure/Services/AI/EmbeddingOptions.cs";
         const string excepciones = "AsistenteJuridico.Application/Common/Exceptions/EmbeddingProviderExceptions.cs";
 
-        // Ningún consumidor: la interfaz solo aparece en su definición, sus dos implementaciones y el registro en DI.
-        Assert.Equal(new[] { interfaz, registro, mock, openAI }, Con("IEmbeddingProvider"));
-        Assert.Equal(new[] { interfaz, mock, openAI }, Con("EmbedAsync"));
+        // La interfaz solo aparece en su definición, sus dos implementaciones, el registro en DI y, desde la 8.4, su
+        // único consumidor: el servicio de indexación (y el perfil de indexación, que compone la firma).
+        const string indexacion = "AsistenteJuridico.Infrastructure/Services/IndexacionSemanticaService.cs";
+        const string codigos = "AsistenteJuridico.Application/Common/Indexacion/CodigosIndexacion.cs";
+        Assert.Equal(new[] { codigos, interfaz, registro, mock, openAI, indexacion }.Order(), Con("IEmbeddingProvider"));
+        Assert.Equal(new[] { interfaz, mock, openAI, indexacion }.Order(), Con("EmbedAsync"));
         Assert.Equal(new[] { "AsistenteJuridico.Infrastructure/DependencyInjection.cs", registro }, Con("AddEmbeddingProvider"));
 
         // Los archivos de la 8.3 no persisten, no registran consumo, no calculan costes y no indexan ni buscan.
@@ -396,17 +399,23 @@ public class Fase83ConfiguracionYArquitecturaTests
             }
         }
 
-        // Ningún worker nuevo: los mismos dos servicios en segundo plano que antes de la 8.3.
+        // Los servicios en segundo plano: los dos anteriores a la 8.3 y, desde la 8.4, el worker de indexación.
         Assert.Equal(new[]
         {
             "AsistenteJuridico.Infrastructure/BackgroundServices/AlertasBackgroundService.cs",
+            "AsistenteJuridico.Infrastructure/BackgroundServices/IndexacionSemanticaBackgroundService.cs",
             "AsistenteJuridico.Infrastructure/BackgroundServices/ProcesamientoIaRecoveryBackgroundService.cs"
         }, Con(": BackgroundService"));
 
-        // Nadie escribe embeddings: ninguna asignación a la propiedad Embedding ni alta de fragmentos o índices.
+        // Desde la 8.4, la única asignación a la propiedad Embedding y la única alta de fragmentos están en el servicio
+        // de indexación. Los índices se siguen sin dar de alta con EF (el sembrado es SQL); el único
+        // "new DocumentoIndice" es la entidad adjunta con la que ese servicio escribe sobre su propia fila.
         var asignacion = new System.Text.RegularExpressions.Regex(@"\bEmbedding\s*=[^=>]");
-        Assert.Empty(archivos.Where(a => !a.Key.Contains("/Migrations/") && asignacion.IsMatch(a.Value)).Select(a => a.Key));
-        Assert.Empty(Con("DocumentoFragmentos.Add").Concat(Con("DocumentoIndices.Add")).Concat(Con("new DocumentoFragmento")).Concat(Con("new DocumentoIndice")));
+        Assert.Equal(new[] { indexacion }, archivos.Where(a => !a.Key.Contains("/Migrations/") && asignacion.IsMatch(a.Value)).Select(a => a.Key));
+        Assert.Equal(new[] { indexacion }, Con("DocumentoFragmentos.Add"));
+        Assert.Equal(new[] { indexacion }, Con("new DocumentoFragmento"));
+        Assert.Empty(Con("DocumentoIndices.Add"));
+        Assert.Equal(new[] { indexacion }, Con("new DocumentoIndice"));
 
         // La API no referencia el proveedor (ningún endpoint nuevo).
         Assert.DoesNotContain(archivos.Keys, a => a.StartsWith("AsistenteJuridico.API/") && archivos[a].Contains("Embedding", StringComparison.Ordinal));

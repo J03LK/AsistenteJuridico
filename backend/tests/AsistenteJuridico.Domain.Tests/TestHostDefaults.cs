@@ -16,6 +16,13 @@ internal static class TestHostDefaults
 #pragma warning disable CA2255 // Inicializador de módulo en un ensamblado de pruebas: se ejecuta antes de crear cualquier host.
     [ModuleInitializer]
 #pragma warning restore CA2255
-    internal static void Inicializar() =>
+    internal static void Inicializar()
+    {
         Environment.SetEnvironmentVariable("AI__ProcessingRecovery__Enabled", "false");
+
+        // Fase 8.4: por el mismo motivo, el worker alojado de indexación semántica no se ejecuta en los hosts de prueba
+        // (marcaría y purgaría índices de otras pruebas en la base compartida). Las pruebas de la 8.4 ejecutan los
+        // pasos de forma explícita sobre una base temporal.
+        Environment.SetEnvironmentVariable("AI__Indexing__Enabled", "false");
+    }
 }

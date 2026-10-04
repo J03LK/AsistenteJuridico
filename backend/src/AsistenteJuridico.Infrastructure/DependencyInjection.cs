@@ -250,6 +250,17 @@ public static class DependencyInjection
         // ──────────────────────────────────────────────────────────
         AsistenteJuridico.Infrastructure.Services.AI.EmbeddingServiceCollectionExtensions.AddEmbeddingProvider(services, configuration);
 
+        // ──────────────────────────────────────────────────────────
+        // FASE 8.4: INDEXACIÓN SEMÁNTICA (worker, lease, recuperación y activación atómica; sin endpoints)
+        // ──────────────────────────────────────────────────────────
+        services.AddSingleton<IValidateOptions<AsistenteJuridico.Infrastructure.BackgroundServices.IndexacionOptions>,
+            AsistenteJuridico.Infrastructure.BackgroundServices.IndexacionOptionsValidator>();
+        services.AddOptions<AsistenteJuridico.Infrastructure.BackgroundServices.IndexacionOptions>()
+            .Bind(configuration.GetSection(AsistenteJuridico.Infrastructure.BackgroundServices.IndexacionOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<AsistenteJuridico.Application.Features.Indexacion.IIndexacionSemanticaService, IndexacionSemanticaService>();
+        services.AddHostedService<AsistenteJuridico.Infrastructure.BackgroundServices.IndexacionSemanticaBackgroundService>();
+
         return services;
     }
 }
