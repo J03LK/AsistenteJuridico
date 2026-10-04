@@ -13,8 +13,18 @@ public class AIUsageLog : BaseEntity, IMultiTenant
     public Guid TenantId { get; set; }
     public Tenant Tenant { get; set; } = null!;
 
-    public Guid UsuarioId { get; set; }
-    public Usuario Usuario { get; set; } = null!;
+    /// <summary>
+    /// Fase 8 (contrato §14.1): obligatorio cuando <see cref="Origen"/> es Usuario (toda operación iniciada por una
+    /// petición HTTP autenticada); NULL solo en operaciones de Worker o Sistema, que se identifican con
+    /// <see cref="ActorSistema"/>. Un CHECK en la base garantiza la combinación.
+    /// </summary>
+    public Guid? UsuarioId { get; set; }
+    public Usuario? Usuario { get; set; }
+
+    public OrigenUsoIA Origen { get; set; } = OrigenUsoIA.Usuario;
+
+    /// <summary>Identificador del worker u operación de sistema (p. ej. "worker:indexacion-semantica"); NULL para usuarios.</summary>
+    public string? ActorSistema { get; set; }
 
     /// <summary>
     /// Identificador de REFERENCIA HISTÓRICA a la conversación.

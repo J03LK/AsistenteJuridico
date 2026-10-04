@@ -1144,7 +1144,11 @@ public class AIService : IAIService
         var desglosePorUsuario = logs
             .GroupBy(l => new { l.UsuarioId, Nombre = l.Usuario?.NombreCompleto ?? "Usuario Desconocido" })
             .Select(g => new AIConsumoUsuarioDto(
-                g.Key.UsuarioId,
+                // Fase 8.1: AIUsageLog.UsuarioId pasó a Guid? (modelo Origen/ActorSistema); el DTO no cambia. La
+                // consulta no filtra por Origen, así que un UsuarioId nulo se rechaza explícitamente en lugar de
+                // convertirse en Guid.Empty: este desglose solo admite consumos de usuario.
+                g.Key.UsuarioId ?? throw new InvalidOperationException(
+                    "Registro de consumo de IA sin UsuarioId: el desglose por usuario solo admite Origen = Usuario."),
                 g.Key.Nombre,
                 g.Count(),
                 g.Sum(l => l.TotalTokens),

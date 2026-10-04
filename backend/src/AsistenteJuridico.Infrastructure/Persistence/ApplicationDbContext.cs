@@ -38,10 +38,36 @@ public class ApplicationDbContext : IdentityDbContext<Usuario, ApplicationRole, 
     public DbSet<AIConversation> AIConversations => Set<AIConversation>();
     public DbSet<AIMessage> AIMessages => Set<AIMessage>();
     public DbSet<AIUsageLog> AIUsageLogs => Set<AIUsageLog>();
+    public DbSet<DocumentoIndice> DocumentoIndices => Set<DocumentoIndice>();
+    public DbSet<DocumentoFragmento> DocumentoFragmentos => Set<DocumentoFragmento>();
+
+    /// <summary>
+    /// Fase 8.1: el modelo de este contexto contiene una propiedad vector (documento_fragmentos.Embedding), así que
+    /// TODO ApplicationDbContext sobre PostgreSQL necesita el plugin de pgvector para construir el modelo, aunque la
+    /// operación no toque fragmentos (sin él, falla la construcción del modelo). Solo actúa cuando el plugin FALTA:
+    /// el contexto de DI y los que reutilizan sus opciones (auditoría y consumo independientes) ya lo traen y no se
+    /// tocan; lo añade a los construidos con opciones propias (pruebas). No afecta a InMemory (no relacional). Solo
+    /// registra el mapeo de tipos: no ejecuta consultas ni vectoriza nada.
+    /// </summary>
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        var esRelacional = optionsBuilder.Options.Extensions
+            .OfType<Microsoft.EntityFrameworkCore.Infrastructure.RelationalOptionsExtension>().Any();
+        var tienePgvector = optionsBuilder.Options.FindExtension<Pgvector.EntityFrameworkCore.VectorDbContextOptionsExtension>() != null;
+
+        if (esRelacional && !tienePgvector)
+        {
+            optionsBuilder.UseNpgsql(npgsql => npgsql.UseVector());
+        }
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        // Fase 8.1: pgvector (vector) y unaccent (texto de búsqueda sin acentos). Las crea la migración Fase81.
+        modelBuilder.HasPostgresExtension("vector");
+        modelBuilder.HasPostgresExtension("unaccent");
 
         // Renombrar tablas de Identity a snake_case
         modelBuilder.Entity<Usuario>(b =>
@@ -81,6 +107,12 @@ public class ApplicationDbContext : IdentityDbContext<Usuario, ApplicationRole, 
 
         // Aplicar configuraciones Fluent API del ensamblado
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(ApplicationDbContext).Assembly);
+
+        // Fase 8.1: tipos de pgvector y tsvector solo con PostgreSQL (InMemory no los admite).
+        if (Database.IsNpgsql())
+        {
+            Configurations.DocumentoFragmentoConfiguration.ConfigurarPostgreSql(modelBuilder.Entity<DocumentoFragmento>());
+        }
 
         // Aplicar filtros globales de consulta estrictos (Multi-Tenant y Soft Delete)
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())

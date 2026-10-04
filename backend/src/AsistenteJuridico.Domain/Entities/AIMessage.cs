@@ -42,5 +42,11 @@ public class AIMessage : BaseEntity, IMultiTenant
     /// </summary>
     public string Disclaimer { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Fase 8 (contrato §12): fuentes citadas por una respuesta RAG (jsonb). Solo identificadores y metadatos,
+    /// nunca el texto de los fragmentos. NULL en los mensajes sin RAG.
+    /// </summary>
+    public string? FuentesJson { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

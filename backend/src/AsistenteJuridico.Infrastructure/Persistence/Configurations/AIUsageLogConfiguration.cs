@@ -8,9 +8,24 @@ public class AIUsageLogConfiguration : IEntityTypeConfiguration<AIUsageLog>
 {
     public void Configure(EntityTypeBuilder<AIUsageLog> builder)
     {
-        builder.ToTable("ai_usage_logs");
+        // Fase 8.1 (contrato §14.1): una operación de usuario siempre lleva su UsuarioId; Worker y Sistema llevan
+        // ActorSistema y nunca UsuarioId. La nulabilidad no puede ocultar el actor de una operación interactiva.
+        builder.ToTable("ai_usage_logs", t => t.HasCheckConstraint("CK_ai_usage_logs_Actor",
+            "(\"Origen\" = 1 AND \"UsuarioId\" IS NOT NULL AND \"ActorSistema\" IS NULL) OR " +
+            "(\"Origen\" IN (2, 3) AND \"UsuarioId\" IS NULL AND \"ActorSistema\" IS NOT NULL)"));
 
         builder.HasKey(l => l.Id);
+
+        // Valor por defecto constante: añadir la columna es solo un cambio de metadatos en PostgreSQL (sin UPDATE de
+        // filas), compatible con los triggers que impiden modificar ai_usage_logs. Las filas existentes quedan como Usuario.
+        builder.Property(l => l.Origen)
+            .HasConversion<short>()
+            .IsRequired()
+            .HasDefaultValue(Domain.Enums.OrigenUsoIA.Usuario)
+            .HasSentinel((Domain.Enums.OrigenUsoIA)0);
+
+        builder.Property(l => l.ActorSistema)
+            .HasMaxLength(100);
 
         builder.Property(l => l.CasoUso)
             .IsRequired();
@@ -55,11 +70,13 @@ public class AIUsageLogConfiguration : IEntityTypeConfiguration<AIUsageLog>
             .HasForeignKey(l => l.TenantId)
             .OnDelete(DeleteBehavior.Restrict);
 
-        // Relación FK compuesta tenant-aware con Usuario
+        // Relación FK compuesta tenant-aware con Usuario. Opcional desde la Fase 8.1 (Worker/Sistema sin usuario):
+        // con UsuarioId NULL la FK compuesta no se comprueba (MATCH SIMPLE).
         builder.HasOne(l => l.Usuario)
             .WithMany()
             .HasForeignKey(l => new { l.TenantId, l.UsuarioId })
             .HasPrincipalKey(u => new { u.TenantId, u.Id })
+            .IsRequired(false)
             .OnDelete(DeleteBehavior.Restrict);
 
         // Desacoplar relación de clave foránea con Conversación para preservar inmutabilidad estricta:

@@ -24,6 +24,8 @@ public interface IApplicationDbContext
     DbSet<AIConversation> AIConversations { get; }
     DbSet<AIMessage> AIMessages { get; }
     DbSet<AIUsageLog> AIUsageLogs { get; }
+    DbSet<DocumentoIndice> DocumentoIndices { get; }
+    DbSet<DocumentoFragmento> DocumentoFragmentos { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

@@ -38,6 +38,10 @@ public class AIMessageConfiguration : IEntityTypeConfiguration<AIMessage>
             .IsRequired()
             .HasDefaultValue(false);
 
+        // Fase 8.1 (contrato §12): fuentes citadas (solo identificadores y metadatos, nunca texto).
+        builder.Property(m => m.FuentesJson)
+            .HasColumnType("jsonb");
+
         builder.Property(m => m.CreatedAt)
             .HasColumnType("timestamp with time zone")
             .HasDefaultValueSql("CURRENT_TIMESTAMP");

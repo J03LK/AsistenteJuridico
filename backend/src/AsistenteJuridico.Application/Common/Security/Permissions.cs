@@ -57,6 +57,10 @@ public static class Permissions
     public const string AIDraft = "AI.Draft";
     public const string AIUsageRead = "AI.UsageRead";
 
+    // RAG y búsqueda semántica (Fase 8.1, contrato §5). Siempre sujetos a la autorización documental.
+    public const string AISearch = "AI.Search";
+    public const string AIIndexManage = "AI.IndexManage";
+
     /// <summary>
     /// Retorna los permisos asignados por defecto a un rol del estudio jurídico.
     /// </summary>
@@ -104,7 +108,9 @@ public static class Permissions
                 AISummarize,
                 AIExtract,
                 AIDraft,
-                AIUsageRead
+                AIUsageRead,
+                AISearch,
+                AIIndexManage
             ],
             Roles.AbogadoSenior =>
             [
@@ -133,7 +139,8 @@ public static class Permissions
                 AISummarize,
                 AIExtract,
                 AIDraft,
-                AIUsageRead
+                AIUsageRead,
+                AISearch
             ],
             Roles.AbogadoJunior =>
             [
@@ -155,7 +162,8 @@ public static class Permissions
                 AIChat,
                 AISummarize,
                 AIExtract,
-                AIDraft
+                AIDraft,
+                AISearch
             ],
             Roles.AsistenteLegal =>
             [
@@ -174,7 +182,9 @@ public static class Permissions
                 AIChat,
                 AISummarize,
                 AIExtract,
-                AIDraft
+                AIDraft,
+                // Fase 8.1: solo expedientes con tarea vigente (autorización documental de la 6.X).
+                AISearch
             ],
             _ => []
         };

@@ -11,5 +11,10 @@ public enum AICasoUso
     ExtraccionMetadatos = 4,
     ExtraccionHechos = 4,
     GeneracionBorrador = 5,
-    RedaccionEscrito = 5
+    RedaccionEscrito = 5,
+
+    // Fase 8 (contrato §6 y §14)
+    IndexacionSemantica = 6,
+    BusquedaSemantica = 7,
+    PreguntaRag = 8
 }

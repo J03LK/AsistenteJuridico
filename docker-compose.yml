@@ -5,9 +5,13 @@
 
 services:
 
-  # ── PostgreSQL 16 ──────────────────────────────────────────
+  # ── PostgreSQL 16 + pgvector ───────────────────────────────
+  # Fase 8.1 (DA8-1): misma base postgres:16-alpine con pgvector compilado (docker/postgres/Dockerfile).
+  # Cambio de imagen en entornos con datos: docs/FASE_8_CONTRATO.md §3.1.1. NUNCA usar `down -v`.
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: ./docker/postgres
+    image: asistente-juridico/postgres:16-alpine-pgvector0.8.7
     container_name: aj_postgres
     restart: unless-stopped
     environment:
