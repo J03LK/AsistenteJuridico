@@ -347,6 +347,11 @@ internal sealed class ExtractorObservado(IDocumentTextExtractor interno, Applica
         TransaccionAbierta.Add(contexto.Database.CurrentTransaction != null);
         return interno.ExtractAsync(documentoId, rutaAlmacenamiento, contentType, cancellationToken);
     }
+
+    // Fase 8.2: la interfaz incorpora la extracción segmentada; se delega sin observarla (ningún flujo de la 6.X la usa).
+    public Task<SegmentedExtractionResult> ExtractSegmentsAsync(Guid documentoId, string? rutaAlmacenamiento, string? contentType,
+        ExtractionProfile perfil, CancellationToken cancellationToken = default) =>
+        interno.ExtractSegmentsAsync(documentoId, rutaAlmacenamiento, contentType, perfil, cancellationToken);
 }
 
 /// <summary>Logger que guarda los mensajes formateados.</summary>
